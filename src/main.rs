@@ -1,4 +1,6 @@
+mod ast;
 mod scanner;
+mod token;
 
 use std::{env, fmt, fs, io, path};
 
@@ -16,6 +18,45 @@ impl fmt::Display for LoxError {
 impl error_stack::Context for LoxError {}
 
 fn main() -> error_stack::Result<(), LoxError> {
+    {
+        use ast::*;
+        use expr::*;
+        use token::*;
+        println!(
+            "{}",
+            Printer::print(&Expr::Binary(Box::new(Binary {
+                left: Expr::Unary(Box::new(Unary {
+                    operator: Token {
+                        typ: Type::Minus,
+                        lexeme: "-",
+                        line: 1,
+                    },
+                    right: Expr::Literal(Box::new(expr::Literal {
+                        literal: token::Literal {
+                            typ: LiteralType::Number(123.),
+                            lexeme: "123",
+                            line: 1,
+                        },
+                    })),
+                })),
+                operator: Token {
+                    typ: Type::Star,
+                    lexeme: "*",
+                    line: 1
+                },
+                right: Expr::Grouping(Box::new(Grouping {
+                    expression: Expr::Literal(Box::new(expr::Literal {
+                        literal: token::Literal {
+                            typ: LiteralType::Number(45.67),
+                            lexeme: "45.67",
+                            line: 1
+                        }
+                    }))
+                })),
+            })))
+        );
+    }
+
     let args = env::args().collect::<Vec<_>>();
 
     match args[..] {

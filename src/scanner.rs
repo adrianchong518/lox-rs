@@ -3,6 +3,8 @@ use std::{fmt, str};
 use error_stack::{IntoReport, ResultExt};
 use itertools::{Itertools as _, PeekingNext as _};
 
+use crate::token;
+
 /// Scanner used for lexing the provided `source` into an [`Iterator`] of [`Token`]s
 #[derive(Debug)]
 pub struct Scanner<'s> {
@@ -27,8 +29,13 @@ impl<'s> Scanner<'s> {
     }
 
     /// Helper to create a new [`Token`] from its `typ` and location in `source`
-    fn new_token(&self, typ: TokenType<'s>, token_start: usize, token_end: usize) -> Token<'s> {
-        Token {
+    fn new_token(
+        &self,
+        typ: token::Type<'s>,
+        token_start: usize,
+        token_end: usize,
+    ) -> token::Token<'s> {
+        token::Token {
             typ,
             lexeme: &self.source[token_start..=token_end],
             line: self.current_line,
@@ -37,57 +44,55 @@ impl<'s> Scanner<'s> {
 }
 
 impl<'s> Iterator for Scanner<'s> {
-    type Item = error_stack::Result<Token<'s>, SyntaxError>;
+    type Item = error_stack::Result<token::Token<'s>, SyntaxError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        use token::{LiteralType, Type};
+
         let next_token = 'tok: loop {
             let (i, c) = self.char_indices.next()?;
             let token_start = i;
 
             match c {
                 // These tokens can be easily matched against
-                '(' => break self.new_token(TokenType::LeftParen, token_start, i),
-                ')' => break self.new_token(TokenType::RightParen, token_start, i),
-                '{' => break self.new_token(TokenType::LeftBrace, token_start, i),
-                '}' => break self.new_token(TokenType::RightBrace, token_start, i),
-                ',' => break self.new_token(TokenType::Comma, token_start, i),
-                '.' => break self.new_token(TokenType::Dot, token_start, i),
-                '-' => break self.new_token(TokenType::Minus, token_start, i),
-                '+' => break self.new_token(TokenType::Plus, token_start, i),
-                ';' => break self.new_token(TokenType::Semicolon, token_start, i),
-                '*' => break self.new_token(TokenType::Star, token_start, i),
+                '(' => break self.new_token(Type::LeftParen, token_start, i),
+                ')' => break self.new_token(Type::RightParen, token_start, i),
+                '{' => break self.new_token(Type::LeftBrace, token_start, i),
+                '}' => break self.new_token(Type::RightBrace, token_start, i),
+                ',' => break self.new_token(Type::Comma, token_start, i),
+                '.' => break self.new_token(Type::Dot, token_start, i),
+                '-' => break self.new_token(Type::Minus, token_start, i),
+                '+' => break self.new_token(Type::Plus, token_start, i),
+                ';' => break self.new_token(Type::Semicolon, token_start, i),
+                '*' => break self.new_token(Type::Star, token_start, i),
 
                 // These tokens requires peeking at the next character to determine the token at hand
                 '!' => {
                     if let Some((i, _)) = self.char_indices.peeking_next(|&(_, c)| c == '=') {
-                        break self.new_token(TokenType::BangEqual, token_start, i);
-                    } else {
-                        break self.new_token(TokenType::Bang, token_start, i);
+                        break self.new_token(Type::BangEqual, token_start, i);
                     }
+                    break self.new_token(Type::Bang, token_start, i);
                 }
 
                 '=' => {
                     if let Some((i, _)) = self.char_indices.peeking_next(|&(_, c)| c == '=') {
-                        break self.new_token(TokenType::EqualEqual, token_start, i);
-                    } else {
-                        break self.new_token(TokenType::Equal, token_start, i);
+                        break self.new_token(Type::EqualEqual, token_start, i);
                     }
+                    break self.new_token(Type::Equal, token_start, i);
                 }
 
                 '<' => {
                     if let Some((i, _)) = self.char_indices.peeking_next(|&(_, c)| c == '=') {
-                        break self.new_token(TokenType::LessEqual, token_start, i);
-                    } else {
-                        break self.new_token(TokenType::Less, token_start, i);
+                        break self.new_token(Type::LessEqual, token_start, i);
                     }
+                    break self.new_token(Type::Less, token_start, i);
                 }
 
                 '>' => {
                     if let Some((i, _)) = self.char_indices.peeking_next(|&(_, c)| c == '=') {
-                        break self.new_token(TokenType::GreaterEqual, token_start, i);
-                    } else {
-                        break self.new_token(TokenType::Greater, token_start, i);
+                        break self.new_token(Type::GreaterEqual, token_start, i);
                     }
+                    break self.new_token(Type::Greater, token_start, i);
                 }
 
                 // The `/` token is special as comments also start with `//`
@@ -98,7 +103,7 @@ impl<'s> Iterator for Scanner<'s> {
                             .peeking_take_while(|&(_, c)| c != '\n')
                             .for_each(drop);
                     } else {
-                        break self.new_token(TokenType::Slash, token_start, i);
+                        break self.new_token(Type::Slash, token_start, i);
                     }
                 }
 
@@ -117,7 +122,7 @@ impl<'s> Iterator for Scanner<'s> {
                             // Literal ends when a `"` is hit
                             '"' => {
                                 break 'tok self.new_token(
-                                    TokenType::String(literal),
+                                    Type::Literal(LiteralType::String(literal)),
                                     token_start,
                                     i,
                                 );
@@ -165,7 +170,7 @@ impl<'s> Iterator for Scanner<'s> {
                     match literal.parse::<f64>() {
                         Ok(literal) => {
                             break self.new_token(
-                                TokenType::Number(literal),
+                                Type::Literal(LiteralType::Number(literal)),
                                 literal_start,
                                 literal_end,
                             )
@@ -193,10 +198,10 @@ impl<'s> Iterator for Scanner<'s> {
 
                     let text = &self.source[start..=end];
 
-                    break if let Some(typ) = TokenType::try_from_keyword(text) {
+                    break if let Some(typ) = Type::try_from_keyword(text) {
                         self.new_token(typ, start, end)
                     } else {
-                        self.new_token(TokenType::Identifier(text), start, end)
+                        self.new_token(Type::Identifier(text), start, end)
                     };
                 }
 
@@ -244,117 +249,3 @@ impl fmt::Display for SyntaxError {
 }
 
 impl error_stack::Context for SyntaxError {}
-
-#[derive(Debug)]
-pub struct Token<'s> {
-    typ: TokenType<'s>,
-    lexeme: &'s str,
-    line: usize,
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub enum TokenType<'s> {
-    // single character tokens (with no ambiguity)
-    /// `(`
-    LeftParen,
-    /// `)`
-    RightParen,
-    /// `{`
-    LeftBrace,
-    /// `}`
-    RightBrace,
-    /// `,`
-    Comma,
-    /// `.`
-    Dot,
-    /// `-`
-    Minus,
-    /// `+`
-    Plus,
-    /// `;`
-    Semicolon,
-    /// `/`
-    Slash,
-    /// `*`
-    Star,
-
-    // 1/2 character tokens (with ambiguity)
-    /// `!`
-    Bang,
-    /// `!=`
-    BangEqual,
-    /// `=`
-    Equal,
-    /// `==`
-    EqualEqual,
-    /// `>`
-    Greater,
-    /// `>=`
-    GreaterEqual,
-    /// `<`
-    Less,
-    /// `<=`
-    LessEqual,
-
-    Identifier(&'s str),
-    String(String),
-    Number(f64),
-
-    /// `and`
-    And,
-    /// `class`
-    Class,
-    /// `else`
-    Else,
-    /// `false`
-    False,
-    /// `fun`
-    Fun,
-    /// `for`
-    For,
-    /// `if`
-    If,
-    /// `nil`
-    Nil,
-    /// `or`
-    Or,
-    /// `print`
-    Print,
-    /// `return`
-    Return,
-    /// `super`
-    Super,
-    /// `this`
-    This,
-    /// `true`
-    True,
-    /// `var`
-    Var,
-    /// `while`
-    While,
-}
-
-impl<'s> TokenType<'s> {
-    fn try_from_keyword(text: &str) -> Option<Self> {
-        Some(match text {
-            "and" => Self::And,
-            "class" => Self::Class,
-            "else" => Self::Else,
-            "false" => Self::False,
-            "for" => Self::For,
-            "fun" => Self::Fun,
-            "if" => Self::If,
-            "nil" => Self::Nil,
-            "or" => Self::Or,
-            "print" => Self::Print,
-            "return" => Self::Return,
-            "super" => Self::Super,
-            "this" => Self::This,
-            "true" => Self::True,
-            "var" => Self::Var,
-            "while" => Self::While,
-            _ => return None,
-        })
-    }
-}
