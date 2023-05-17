@@ -74,7 +74,10 @@ impl ast::expr::Visitor for Interpreter {
             token::Type::Plus => match (&left, &right) {
                 (object::Object::Number(l), object::Object::Number(r)) => Ok((l + r).into()),
 
-                (object::Object::String(l), object::Object::String(r)) => {
+                (l, r)
+                    if matches!(l, object::Object::String(_))
+                        || matches!(r, object::Object::String(_)) =>
+                {
                     Ok(format!("{l}{r}").into())
                 }
 

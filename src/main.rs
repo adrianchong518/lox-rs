@@ -5,7 +5,7 @@ mod parser;
 mod scanner;
 mod token;
 
-use std::{borrow::Cow, env, fmt, fs, io, path};
+use std::{env, fmt, fs, io, path};
 
 use error_stack::{IntoReport as _, ResultExt as _};
 
