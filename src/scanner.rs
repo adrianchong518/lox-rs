@@ -1,13 +1,53 @@
-use std::{fmt, str};
+use std::{borrow::Cow, fmt, str};
 
 use error_stack::{IntoReport, ResultExt};
 use itertools::{Itertools as _, PeekingNext as _};
 
 use crate::token;
 
+#[derive(Debug)]
+pub struct SyntaxError {
+    line: usize,
+}
+
+impl SyntaxError {
+    fn new(line: usize) -> Self {
+        SyntaxError { line }
+    }
+}
+
+impl fmt::Display for SyntaxError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[line {}] syntax error", self.line)
+    }
+}
+
+impl error_stack::Context for SyntaxError {}
+
+pub fn scan(
+    source: &str,
+) -> (
+    Vec<token::Token<'_>>,
+    Option<error_stack::Report<SyntaxError>>,
+) {
+    let scanner = Scanner::new(source);
+    let mut tokens = Vec::new();
+    let mut reports: Option<error_stack::Report<SyntaxError>> = None;
+
+    scanner.for_each(|result| match result {
+        Ok(token) => tokens.push(token),
+        Err(report) => match reports.as_mut() {
+            Some(reports) => reports.extend_one(report),
+            None => reports = Some(report),
+        },
+    });
+
+    (tokens, reports)
+}
+
 /// Scanner used for lexing the provided `source` into an [`Iterator`] of [`Token`]s
 #[derive(Debug)]
-pub struct Scanner<'s> {
+struct Scanner<'s> {
     /// Original source code
     source: &'s str,
 
@@ -37,7 +77,7 @@ impl<'s> Scanner<'s> {
     ) -> token::Token<'s> {
         token::Token {
             typ,
-            lexeme: &self.source[token_start..=token_end],
+            lexeme: Cow::from(&self.source[token_start..=token_end]),
             line: self.current_line,
         }
     }
@@ -179,7 +219,7 @@ impl<'s> Iterator for Scanner<'s> {
                             return Some(
                                 Err(e)
                                     .into_report()
-                                    .change_context(SyntaxError::new(self.current_line))
+                                    .change_context_lazy(|| SyntaxError::new(self.current_line))
                                     .attach_printable_lazy(|| {
                                         format!("unable to parse {literal:?} as `f64`")
                                     }),
@@ -201,7 +241,7 @@ impl<'s> Iterator for Scanner<'s> {
                     break if let Some(typ) = Type::try_from_keyword(text) {
                         self.new_token(typ, start, end)
                     } else {
-                        self.new_token(Type::Identifier(text), start, end)
+                        self.new_token(Type::Identifier(Cow::from(text)), start, end)
                     };
                 }
 
@@ -230,22 +270,3 @@ fn is_identifier_start(ch: char) -> bool {
 fn is_identifier(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
-
-#[derive(Debug)]
-pub struct SyntaxError {
-    line: usize,
-}
-
-impl SyntaxError {
-    fn new(line: usize) -> Self {
-        SyntaxError { line }
-    }
-}
-
-impl fmt::Display for SyntaxError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[line {}] syntax error", self.line)
-    }
-}
-
-impl error_stack::Context for SyntaxError {}

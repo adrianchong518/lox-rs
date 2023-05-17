@@ -1,8 +1,9 @@
 mod ast;
+mod parser;
 mod scanner;
 mod token;
 
-use std::{env, fmt, fs, io, path};
+use std::{borrow::Cow, env, fmt, fs, io, path};
 
 use error_stack::{IntoReport as _, ResultExt as _};
 
@@ -28,27 +29,27 @@ fn main() -> error_stack::Result<(), LoxError> {
                 left: Expr::Unary(Box::new(Unary {
                     operator: Token {
                         typ: Type::Minus,
-                        lexeme: "-",
+                        lexeme: Cow::from("-"),
                         line: 1,
                     },
                     right: Expr::Literal(Box::new(expr::Literal {
                         literal: token::Literal {
                             typ: LiteralType::Number(123.),
-                            lexeme: "123",
+                            lexeme: Cow::from("123"),
                             line: 1,
                         },
                     })),
                 })),
                 operator: Token {
                     typ: Type::Star,
-                    lexeme: "*",
+                    lexeme: Cow::from("*"),
                     line: 1
                 },
                 right: Expr::Grouping(Box::new(Grouping {
                     expression: Expr::Literal(Box::new(expr::Literal {
                         literal: token::Literal {
                             typ: LiteralType::Number(45.67),
-                            lexeme: "45.67",
+                            lexeme: Cow::from("45.67"),
                             line: 1
                         }
                     }))
@@ -89,14 +90,18 @@ fn run_prompt() -> error_stack::Result<(), LoxError> {
             .attach_printable("unable to flush stdout")?;
 
         line.clear();
-        match io::stdin()
+        let result = match io::stdin()
             .read_line(&mut line)
             .into_report()
             .change_context(LoxError)
             .attach_printable("unable to read line from stdin")?
         {
             0 => break,
-            _ => run(&line)?,
+            _ => run(&line),
+        };
+
+        if let Err(report) = result {
+            eprintln!("{report:?}");
         }
     }
 
@@ -115,9 +120,17 @@ fn run_file(filepath: impl AsRef<path::Path>) -> error_stack::Result<(), LoxErro
 }
 
 fn run(source: &str) -> error_stack::Result<(), LoxError> {
-    for token in scanner::Scanner::new(source) {
-        println!("{token:?}");
+    let (tokens, syntax_error) = scanner::scan(source);
+    for token in &tokens {
+        eprintln!("{token:?}");
     }
+
+    if let Some(syntax_error) = syntax_error {
+        return Err(syntax_error).change_context(LoxError);
+    }
+
+    let expression = parser::parse(tokens).change_context(LoxError)?;
+    eprintln!("{}", ast::Printer::print(&expression));
 
     Ok(())
 }

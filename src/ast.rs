@@ -9,6 +9,8 @@ macro_rules! define_ast {
         ),* $(,)? }
     ) => {
         #[allow(dead_code)]
+        $mod_v use $base_mod::$base;
+
         $mod_v mod $base_mod {
             use super::*;
 
@@ -71,7 +73,7 @@ define_ast! {
 pub struct Printer;
 
 impl Printer {
-    pub fn print(expression: &expr::Expr) -> String {
+    pub fn print(expression: &Expr) -> String {
         expression.accept(Printer)
     }
 }
