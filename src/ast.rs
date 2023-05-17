@@ -14,9 +14,9 @@ macro_rules! define_ast {
         $mod_v mod $base_mod {
             use super::*;
 
-            pub trait Visitor<'s> {
+            pub trait Visitor {
                 type Output;
-                $( fn $visit_fn(self, value: &$typ<'s>) -> Self::Output; )*
+                $( fn $visit_fn(&mut self, v: &$typ<'_>) -> Self::Output; )*
             }
 
             pub enum $base<'s> {
@@ -24,7 +24,7 @@ macro_rules! define_ast {
             }
 
             impl<'s> $base<'s> {
-                pub fn accept<V: Visitor<'s>>(&self, visitor: V) -> V::Output {
+                pub fn accept<V: Visitor>(&self, visitor: &mut V) -> V::Output {
                     match self {
                         $( Self::$typ(v) => v.accept(visitor), )*
                     }
@@ -37,7 +37,7 @@ macro_rules! define_ast {
                 }
 
                 impl<'s> $typ<'s> {
-                    fn accept<V: Visitor<'s>>(&self, visitor: V) -> V::Output {
+                    fn accept<V: Visitor>(&self, visitor: &mut V) -> V::Output {
                         visitor.$visit_fn(self)
                     }
                 }
@@ -69,36 +69,34 @@ define_ast! {
     }
 }
 
+pub fn print(expression: &Expr) -> String {
+    expression.accept(&mut Printer)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Printer;
 
-impl Printer {
-    pub fn print(expression: &Expr) -> String {
-        expression.accept(Printer)
-    }
-}
-
-impl<'s> expr::Visitor<'s> for Printer {
+impl expr::Visitor for Printer {
     type Output = String;
 
-    fn visit_binary(self, value: &expr::Binary<'s>) -> Self::Output {
+    fn visit_binary(&mut self, v: &expr::Binary<'_>) -> Self::Output {
         format!(
             "({} {} {})",
-            value.operator.lexeme,
-            value.left.accept(self),
-            value.right.accept(self),
+            v.operator.lexeme,
+            v.left.accept(self),
+            v.right.accept(self),
         )
     }
 
-    fn visit_grouping(self, value: &expr::Grouping<'s>) -> Self::Output {
-        format!("(group {})", value.expression.accept(self))
+    fn visit_grouping(&mut self, v: &expr::Grouping<'_>) -> Self::Output {
+        format!("(group {})", v.expression.accept(self))
     }
 
-    fn visit_literal(self, value: &expr::Literal<'s>) -> Self::Output {
-        format!("{}", value.literal.typ)
+    fn visit_literal(&mut self, v: &expr::Literal<'_>) -> Self::Output {
+        format!("{}", v.literal.typ)
     }
 
-    fn visit_unary(self, value: &expr::Unary<'s>) -> Self::Output {
-        format!("({} {})", value.operator.lexeme, value.right.accept(self))
+    fn visit_unary(&mut self, v: &expr::Unary<'_>) -> Self::Output {
+        format!("({} {})", v.operator.lexeme, v.right.accept(self))
     }
 }

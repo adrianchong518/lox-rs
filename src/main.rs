@@ -1,4 +1,6 @@
 mod ast;
+mod interpreter;
+mod object;
 mod parser;
 mod scanner;
 mod token;
@@ -19,45 +21,6 @@ impl fmt::Display for LoxError {
 impl error_stack::Context for LoxError {}
 
 fn main() -> error_stack::Result<(), LoxError> {
-    {
-        use ast::*;
-        use expr::*;
-        use token::*;
-        println!(
-            "{}",
-            Printer::print(&Expr::Binary(Box::new(Binary {
-                left: Expr::Unary(Box::new(Unary {
-                    operator: Token {
-                        typ: Type::Minus,
-                        lexeme: Cow::from("-"),
-                        line: 1,
-                    },
-                    right: Expr::Literal(Box::new(expr::Literal {
-                        literal: token::Literal {
-                            typ: LiteralType::Number(123.),
-                            lexeme: Cow::from("123"),
-                            line: 1,
-                        },
-                    })),
-                })),
-                operator: Token {
-                    typ: Type::Star,
-                    lexeme: Cow::from("*"),
-                    line: 1
-                },
-                right: Expr::Grouping(Box::new(Grouping {
-                    expression: Expr::Literal(Box::new(expr::Literal {
-                        literal: token::Literal {
-                            typ: LiteralType::Number(45.67),
-                            lexeme: Cow::from("45.67"),
-                            line: 1
-                        }
-                    }))
-                })),
-            })))
-        );
-    }
-
     let args = env::args().collect::<Vec<_>>();
 
     match args[..] {
@@ -130,7 +93,13 @@ fn run(source: &str) -> error_stack::Result<(), LoxError> {
     }
 
     let expression = parser::parse(tokens).change_context(LoxError)?;
-    eprintln!("{}", ast::Printer::print(&expression));
+    eprintln!("{}", ast::print(&expression));
+
+    let mut interpreter = interpreter::Interpreter;
+
+    interpreter
+        .interprete(&expression)
+        .change_context(LoxError)?;
 
     Ok(())
 }

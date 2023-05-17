@@ -1,12 +1,13 @@
 use std::{borrow::Cow, fmt};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token<'s> {
     pub typ: Type<'s>,
     pub lexeme: Cow<'s, str>,
     pub line: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct Literal<'s> {
     pub typ: LiteralType,
     pub lexeme: Cow<'s, str>,
