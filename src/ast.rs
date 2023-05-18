@@ -1,30 +1,32 @@
+use std::fmt;
+
 use crate::token;
 
 macro_rules! define_ast {
     (
-        $mod_v:vis mod $base_mod:ident => $base:ident { $(
+        mod $base_mod:ident => $base:ident { $(
             $typ:ident<$lt:lifetime> [$visit_fn:ident] {
-                $( $v:vis $field:ident : $field_type:ty ),* $(,)?
+                $( $field:ident : $field_type:ty ),* $(,)?
             }
         ),* $(,)? }
     ) => {
-        #[allow(dead_code)]
-        $mod_v use $base_mod::$base;
+        pub use $base_mod::$base;
 
-        $mod_v mod $base_mod {
+        pub mod $base_mod {
             use super::*;
 
-            pub trait Visitor {
+            pub trait Visitor<'s> {
                 type Output;
-                $( fn $visit_fn(&mut self, v: &$typ<'_>) -> Self::Output; )*
+                $( fn $visit_fn(&mut self, v: &$typ<'s>) -> Self::Output; )*
             }
 
+            #[derive(Debug)]
             pub enum $base<'s> {
                 $( $typ(Box<$typ<'s>>), )*
             }
 
             impl<'s> $base<'s> {
-                pub fn accept<V: Visitor>(&self, visitor: &mut V) -> V::Output {
+                pub fn accept<V: Visitor<'s>>(&self, visitor: &mut V) -> V::Output {
                     match self {
                         $( Self::$typ(v) => v.accept(visitor), )*
                     }
@@ -32,13 +34,20 @@ macro_rules! define_ast {
             }
 
             $(
+                #[derive(Debug)]
                 pub struct $typ<$lt> {
-                    $( $v $field: $field_type, )*
+                    $( pub $field: $field_type, )*
                 }
 
                 impl<'s> $typ<'s> {
-                    fn accept<V: Visitor>(&self, visitor: &mut V) -> V::Output {
+                    fn accept<V: Visitor<'s>>(&self, visitor: &mut V) -> V::Output {
                         visitor.$visit_fn(self)
+                    }
+                }
+
+                impl<'s> From<$typ<'s>> for $base<'s> {
+                    fn from(value: $typ<'s>) -> Self {
+                        Self::$typ(Box::new(value))
                     }
                 }
             )*
@@ -47,56 +56,113 @@ macro_rules! define_ast {
 }
 
 define_ast! {
-    pub mod expr => Expr {
+    mod expr => Expr {
+        Assign<'s> [visit_assign] {
+            info: token::Info<'s>,
+            value: Expr<'s>,
+        },
+
         Binary<'s> [visit_binary] {
-            pub left: Expr<'s>,
-            pub operator: token::Token<'s>,
-            pub right: Expr<'s>,
+            left: Expr<'s>,
+            operator: token::Token<'s>,
+            right: Expr<'s>,
         },
 
         Grouping<'s> [visit_grouping] {
-            pub expression: Expr<'s>,
+            expression: Expr<'s>,
         },
 
         Literal<'s> [visit_literal] {
-            pub literal: token::Literal<'s>,
+            literal: token::Literal<'s>,
         },
 
         Unary<'s> [visit_unary] {
-            pub operator: token::Token<'s>,
-            pub right: Expr<'s>,
+            operator: token::Token<'s>,
+            right: Expr<'s>,
         },
+
+        Variable<'s> [visit_variable] {
+            info: token::Info<'s>
+        }
     }
 }
 
-pub fn print(expression: &Expr) -> String {
-    expression.accept(&mut Printer)
+impl fmt::Display for Expr<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.accept(&mut Printer))
+    }
+}
+
+define_ast! {
+    mod stmt => Stmt {
+        Expression<'s> [visit_expr] {
+            expression: expr::Expr<'s>,
+        },
+
+        Print<'s> [visit_print] {
+            expression: expr::Expr<'s>,
+        },
+
+        Var<'s> [visit_var] {
+            info: token::Info<'s>,
+            initializer: Option<expr::Expr<'s>>,
+        }
+    }
+}
+
+impl fmt::Display for Stmt<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.accept(&mut Printer))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Printer;
+struct Printer;
 
-impl expr::Visitor for Printer {
+impl expr::Visitor<'_> for Printer {
     type Output = String;
 
-    fn visit_binary(&mut self, v: &expr::Binary<'_>) -> Self::Output {
-        format!(
-            "({} {} {})",
-            v.operator.lexeme,
-            v.left.accept(self),
-            v.right.accept(self),
-        )
+    fn visit_binary(&mut self, v: &expr::Binary) -> Self::Output {
+        format!("({} {} {})", v.operator.info.lexeme, v.left, v.right,)
     }
 
-    fn visit_grouping(&mut self, v: &expr::Grouping<'_>) -> Self::Output {
-        format!("(group {})", v.expression.accept(self))
+    fn visit_grouping(&mut self, v: &expr::Grouping) -> Self::Output {
+        format!("(group {})", v.expression)
     }
 
-    fn visit_literal(&mut self, v: &expr::Literal<'_>) -> Self::Output {
+    fn visit_literal(&mut self, v: &expr::Literal) -> Self::Output {
         format!("{}", v.literal.typ)
     }
 
-    fn visit_unary(&mut self, v: &expr::Unary<'_>) -> Self::Output {
-        format!("({} {})", v.operator.lexeme, v.right.accept(self))
+    fn visit_unary(&mut self, v: &expr::Unary) -> Self::Output {
+        format!("({} {})", v.operator.info.lexeme, v.right)
+    }
+
+    fn visit_variable(&mut self, v: &expr::Variable) -> Self::Output {
+        format!("{}", v.info.lexeme)
+    }
+
+    fn visit_assign(&mut self, v: &expr::Assign) -> Self::Output {
+        format!("(assign {} {})", v.info.lexeme, v.value)
+    }
+}
+
+impl stmt::Visitor<'_> for Printer {
+    type Output = String;
+
+    fn visit_expr(&mut self, v: &stmt::Expression) -> Self::Output {
+        format!("(expr {})", v.expression)
+    }
+
+    fn visit_print(&mut self, v: &stmt::Print) -> Self::Output {
+        format!("(print {})", v.expression)
+    }
+
+    fn visit_var(&mut self, v: &stmt::Var) -> Self::Output {
+        if let Some(initializer) = &v.initializer {
+            format!("(define {} {})", v.info.lexeme, initializer)
+        } else {
+            format!("(define {} nil)", v.info.lexeme)
+        }
     }
 }

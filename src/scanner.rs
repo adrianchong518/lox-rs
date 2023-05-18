@@ -30,19 +30,18 @@ pub fn scan(
     Vec<token::Token<'_>>,
     Option<error_stack::Report<SyntaxError>>,
 ) {
-    let scanner = Scanner::new(source);
     let mut tokens = Vec::new();
-    let mut reports: Option<error_stack::Report<SyntaxError>> = None;
+    let mut error: Option<error_stack::Report<SyntaxError>> = None;
 
-    scanner.for_each(|result| match result {
+    Scanner::new(source).for_each(|result| match result {
         Ok(token) => tokens.push(token),
-        Err(report) => match reports.as_mut() {
-            Some(reports) => reports.extend_one(report),
-            None => reports = Some(report),
+        Err(report) => match &mut error {
+            Some(error) => error.extend_one(report),
+            None => error = Some(report),
         },
     });
 
-    (tokens, reports)
+    (tokens, error)
 }
 
 /// Scanner used for lexing the provided `source` into an [`Iterator`] of [`Token`]s
@@ -71,15 +70,16 @@ impl<'s> Scanner<'s> {
     /// Helper to create a new [`Token`] from its `typ` and location in `source`
     fn new_token(
         &self,
-        typ: token::Type<'s>,
+        typ: token::Type,
         token_start: usize,
         token_end: usize,
     ) -> token::Token<'s> {
-        token::Token {
-            typ,
+        let info = token::Info {
             lexeme: Cow::from(&self.source[token_start..=token_end]),
             line: self.current_line,
-        }
+        };
+
+        token::Token { typ, info }
     }
 }
 
@@ -241,7 +241,7 @@ impl<'s> Iterator for Scanner<'s> {
                     break if let Some(typ) = Type::try_from_keyword(text) {
                         self.new_token(typ, start, end)
                     } else {
-                        self.new_token(Type::Identifier(Cow::from(text)), start, end)
+                        self.new_token(Type::Identifier, start, end)
                     };
                 }
 

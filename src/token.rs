@@ -1,17 +1,21 @@
 use std::{borrow::Cow, fmt};
 
 #[derive(Debug, Clone)]
-pub struct Token<'s> {
-    pub typ: Type<'s>,
+pub struct Info<'s> {
     pub lexeme: Cow<'s, str>,
     pub line: usize,
 }
 
 #[derive(Debug, Clone)]
+pub struct Token<'s> {
+    pub typ: Type,
+    pub info: Info<'s>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Literal<'s> {
     pub typ: LiteralType,
-    pub lexeme: Cow<'s, str>,
-    pub line: usize,
+    pub info: Info<'s>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,7 +34,15 @@ pub enum LiteralType {
 impl Token<'_> {
     pub fn into_owned(self) -> Token<'static> {
         Token {
-            typ: self.typ.into_owned(),
+            typ: self.typ,
+            info: self.info.into_owned(),
+        }
+    }
+}
+
+impl Info<'_> {
+    pub fn into_owned(self) -> Info<'static> {
+        Info {
             lexeme: Cow::from(self.lexeme.into_owned()),
             line: self.line,
         }
@@ -51,7 +63,7 @@ impl fmt::Display for LiteralType {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub enum Type<'s> {
+pub enum Type {
     // single character tokens (with no ambiguity)
     /// `(`
     LeftParen,
@@ -94,7 +106,7 @@ pub enum Type<'s> {
     /// `<=`
     LessEqual,
 
-    Identifier(Cow<'s, str>),
+    Identifier,
     Literal(LiteralType),
 
     /// `and`
@@ -125,7 +137,7 @@ pub enum Type<'s> {
     While,
 }
 
-impl Type<'_> {
+impl Type {
     pub fn try_from_keyword(text: &str) -> Option<Self> {
         Some(match text {
             "and" => Self::And,
@@ -146,44 +158,5 @@ impl Type<'_> {
             "while" => Self::While,
             _ => return None,
         })
-    }
-
-    pub fn into_owned(self) -> Type<'static> {
-        match self {
-            Type::Identifier(ident) => Type::Identifier(Cow::from(ident.into_owned())),
-            Type::LeftParen => Type::LeftParen,
-            Type::RightParen => Type::RightParen,
-            Type::LeftBrace => Type::LeftBrace,
-            Type::RightBrace => Type::RightBrace,
-            Type::Comma => Type::Comma,
-            Type::Dot => Type::Dot,
-            Type::Minus => Type::Minus,
-            Type::Plus => Type::Plus,
-            Type::Semicolon => Type::Semicolon,
-            Type::Slash => Type::Slash,
-            Type::Star => Type::Star,
-            Type::Bang => Type::Bang,
-            Type::BangEqual => Type::BangEqual,
-            Type::Equal => Type::Equal,
-            Type::EqualEqual => Type::EqualEqual,
-            Type::Greater => Type::Greater,
-            Type::GreaterEqual => Type::GreaterEqual,
-            Type::Less => Type::Less,
-            Type::LessEqual => Type::LessEqual,
-            Type::Literal(l) => Type::Literal(l),
-            Type::And => Type::And,
-            Type::Class => Type::Class,
-            Type::Else => Type::Else,
-            Type::Fun => Type::Fun,
-            Type::For => Type::For,
-            Type::If => Type::If,
-            Type::Or => Type::Or,
-            Type::Print => Type::Print,
-            Type::Return => Type::Return,
-            Type::Super => Type::Super,
-            Type::This => Type::This,
-            Type::Var => Type::Var,
-            Type::While => Type::While,
-        }
     }
 }
