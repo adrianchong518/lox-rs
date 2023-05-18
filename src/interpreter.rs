@@ -46,22 +46,31 @@ impl error_stack::Context for RuntimeError {}
 
 impl Interpreter {
     pub fn new() -> Self {
-        Interpreter {
+        Self {
             environment: env::Environment::new(),
         }
     }
 
-    pub fn interpret(
-        &mut self,
-        statements: Vec<ast::Stmt>,
-    ) -> error_stack::Result<(), RuntimeError> {
-        statements
-            .into_iter()
-            .try_for_each(|stmt| self.execute(&stmt))
+    pub fn interpret(&mut self, statements: &[ast::Stmt]) -> error_stack::Result<(), RuntimeError> {
+        for statement in statements {
+            self.execute(statement)?;
+        }
+
+        Ok(())
     }
 
-    fn execute(&mut self, expression: &ast::Stmt) -> error_stack::Result<(), RuntimeError> {
-        expression.accept(self)
+    fn execute(&mut self, statement: &ast::Stmt) -> error_stack::Result<(), RuntimeError> {
+        statement.accept(self)
+    }
+
+    fn execute_block(&mut self, statements: &[ast::Stmt]) -> error_stack::Result<(), RuntimeError> {
+        self.environment.push_new_context();
+
+        let result = statements.iter().try_for_each(|stmt| self.execute(stmt));
+
+        self.environment.pop_context();
+
+        result
     }
 
     fn evaluate(
@@ -72,10 +81,10 @@ impl Interpreter {
     }
 }
 
-impl ast::expr::Visitor<'_> for Interpreter {
+impl ast::expr::Visitor<'_> for &mut Interpreter {
     type Output = error_stack::Result<object::Object, RuntimeError>;
 
-    fn visit_binary(&mut self, v: &ast::expr::Binary) -> Self::Output {
+    fn visit_binary(self, v: &ast::expr::Binary) -> Self::Output {
         let left = self.evaluate(&v.left)?;
         let right = self.evaluate(&v.right)?;
 
@@ -115,15 +124,15 @@ impl ast::expr::Visitor<'_> for Interpreter {
         }
     }
 
-    fn visit_grouping(&mut self, v: &ast::expr::Grouping) -> Self::Output {
+    fn visit_grouping(self, v: &ast::expr::Grouping) -> Self::Output {
         self.evaluate(&v.expression)
     }
 
-    fn visit_literal(&mut self, v: &ast::expr::Literal) -> Self::Output {
+    fn visit_literal(self, v: &ast::expr::Literal) -> Self::Output {
         Ok(object::Object::from(v.literal.typ.clone()))
     }
 
-    fn visit_unary(&mut self, v: &ast::expr::Unary) -> Self::Output {
+    fn visit_unary(self, v: &ast::expr::Unary) -> Self::Output {
         let right = self.evaluate(&v.right)?;
 
         match &v.operator.typ {
@@ -144,7 +153,7 @@ impl ast::expr::Visitor<'_> for Interpreter {
         }
     }
 
-    fn visit_variable(&mut self, v: &ast::expr::Variable) -> Self::Output {
+    fn visit_variable(self, v: &ast::expr::Variable) -> Self::Output {
         let value = self.environment.get(&v.info).ok_or_else(|| {
             error_stack::report!(RuntimeError {
                 info: v.info.clone().into_owned()
@@ -155,7 +164,7 @@ impl ast::expr::Visitor<'_> for Interpreter {
         Ok(value.clone())
     }
 
-    fn visit_assign(&mut self, v: &ast::expr::Assign) -> Self::Output {
+    fn visit_assign(self, v: &ast::expr::Assign) -> Self::Output {
         let value = self.evaluate(&v.value)?;
         self.environment
             .assign(&v.info, value.clone())
@@ -167,21 +176,21 @@ impl ast::expr::Visitor<'_> for Interpreter {
     }
 }
 
-impl ast::stmt::Visitor<'_> for Interpreter {
+impl ast::stmt::Visitor<'_> for &mut Interpreter {
     type Output = error_stack::Result<(), RuntimeError>;
 
-    fn visit_expr(&mut self, v: &ast::stmt::Expression) -> Self::Output {
+    fn visit_expr(self, v: &ast::stmt::Expression) -> Self::Output {
         self.evaluate(&v.expression)?;
         Ok(())
     }
 
-    fn visit_print(&mut self, v: &ast::stmt::Print) -> Self::Output {
+    fn visit_print(self, v: &ast::stmt::Print) -> Self::Output {
         let value = self.evaluate(&v.expression)?;
         println!("{value}");
         Ok(())
     }
 
-    fn visit_var(&mut self, v: &ast::stmt::Var) -> Self::Output {
+    fn visit_var(self, v: &ast::stmt::Var) -> Self::Output {
         let value = v
             .initializer
             .as_ref()
@@ -190,5 +199,9 @@ impl ast::stmt::Visitor<'_> for Interpreter {
         self.environment.define(v.info.clone(), value);
 
         Ok(())
+    }
+
+    fn visit_block(self, v: &ast::stmt::Block) -> Self::Output {
+        self.execute_block(&v.statements)
     }
 }

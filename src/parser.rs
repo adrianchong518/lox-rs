@@ -81,9 +81,9 @@ macro_rules! rule {
 
     (consume($self:ident): $token_pat:pat, $error_msg:expr) => {
         if let Some(token) = rule!(next_matches($self): $token_pat) {
-            token
+            Ok(token)
         } else {
-            return Err($self.error(true).attach_printable($error_msg));
+            Err($self.error(true).attach_printable($error_msg))
         }
     };
 
@@ -91,7 +91,7 @@ macro_rules! rule {
         rule!(
             consume($self): token::Type::Semicolon,
             "expect `;` after expression"
-        );
+        )
     };
 }
 
@@ -117,7 +117,7 @@ where
         let info = rule!(
             consume(self): token::Type::Identifier,
             "expect variable name"
-        )
+        )?
         .info;
 
         let initializer = if rule!(next_matches(self): token::Type::Equal).is_some() {
@@ -126,7 +126,7 @@ where
             None
         };
 
-        rule!(statement_end(self));
+        rule!(statement_end(self))?;
 
         Ok(ast::stmt::Var { info, initializer }.into())
     }
@@ -134,6 +134,14 @@ where
     fn statement(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         if rule!(next_matches(self): token::Type::Print).is_some() {
             self.print_statement()
+        } else if rule!(next_matches(self): token::Type::LeftBrace).is_some() {
+            let (statements, error) = self.block();
+
+            if let Some(error) = error {
+                Err(error)
+            } else {
+                Ok(ast::stmt::Block { statements }.into())
+            }
         } else {
             self.expression_statement()
         }
@@ -141,13 +149,51 @@ where
 
     fn expression_statement(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         let expression = self.expression()?;
-        rule!(statement_end(self));
+        rule!(statement_end(self))?;
         Ok(ast::stmt::Expression { expression }.into())
+    }
+
+    fn block(&mut self) -> (Vec<ast::Stmt<'s>>, Option<error_stack::Report<ParseError>>) {
+        let mut statements = Vec::new();
+        let mut error: Option<error_stack::Report<ParseError>> = None;
+
+        while self
+            .tokens
+            .peek()
+            .map_or(false, |t| !matches_token!(t, token::Type::RightBrace))
+        {
+            let result = self.delcaration();
+            match result {
+                Ok(stmt) => statements.push(stmt),
+                Err(report) => {
+                    if report.current_context().synchronize {
+                        self.synchronize()
+                    }
+
+                    match &mut error {
+                        Some(error) => error.extend_one(report),
+                        None => error = Some(report),
+                    }
+                }
+            }
+        }
+
+        rule!(
+            consume(self): token::Type::RightBrace,
+            "expect `}` after block"
+        )
+        .map_err(|report| match &mut error {
+            Some(error) => error.extend_one(report),
+            None => error = Some(report),
+        })
+        .unwrap();
+
+        (statements, error)
     }
 
     fn print_statement(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         let expression = self.expression()?;
-        rule!(statement_end(self));
+        rule!(statement_end(self))?;
         Ok(ast::stmt::Print { expression }.into())
     }
 
@@ -225,7 +271,7 @@ where
             rule!(
                 consume(self): token::Type::RightParen,
                 "expect `)` after expression"
-            );
+            )?;
 
             return Ok(ast::expr::Grouping { expression }.into());
         }

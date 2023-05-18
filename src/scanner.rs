@@ -182,7 +182,7 @@ impl<'s> Iterator for Scanner<'s> {
                     let literal_start = token_start;
                     let mut literal_end = self
                         .char_indices
-                        .take_while_ref(|&(_, c)| c.is_ascii_digit())
+                        .peeking_take_while(|&(_, c)| c.is_ascii_digit())
                         .last()
                         .map_or(token_start, |(i, _)| i);
 
@@ -200,7 +200,7 @@ impl<'s> Iterator for Scanner<'s> {
 
                             literal_end = self
                                 .char_indices
-                                .take_while_ref(|&(_, c)| c.is_ascii_digit())
+                                .peeking_take_while(|&(_, c)| c.is_ascii_digit())
                                 .last()
                                 .map_or(token_start, |(i, _)| i);
                         }
@@ -232,7 +232,7 @@ impl<'s> Iterator for Scanner<'s> {
                     let start = token_start;
                     let end = self
                         .char_indices
-                        .take_while_ref(|&(_, c)| is_identifier(c))
+                        .peeking_take_while(|&(_, c)| is_identifier(c))
                         .last()
                         .map_or(token_start, |(i, _)| i);
 

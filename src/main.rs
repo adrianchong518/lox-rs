@@ -114,7 +114,9 @@ fn run(
         (None, None) => {}
     }
 
-    interpreter.interpret(statements).change_context(LoxError)?;
+    interpreter
+        .interpret(&statements)
+        .change_context(LoxError)?;
 
     Ok(())
 }

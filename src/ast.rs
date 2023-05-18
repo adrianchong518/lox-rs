@@ -17,7 +17,7 @@ macro_rules! define_ast {
 
             pub trait Visitor<'s> {
                 type Output;
-                $( fn $visit_fn(&mut self, v: &$typ<'s>) -> Self::Output; )*
+                $( fn $visit_fn(self, v: &$typ<'s>) -> Self::Output; )*
             }
 
             #[derive(Debug)]
@@ -26,7 +26,7 @@ macro_rules! define_ast {
             }
 
             impl<'s> $base<'s> {
-                pub fn accept<V: Visitor<'s>>(&self, visitor: &mut V) -> V::Output {
+                pub fn accept<V: Visitor<'s>>(&self, visitor: V) -> V::Output {
                     match self {
                         $( Self::$typ(v) => v.accept(visitor), )*
                     }
@@ -40,7 +40,7 @@ macro_rules! define_ast {
                 }
 
                 impl<'s> $typ<'s> {
-                    fn accept<V: Visitor<'s>>(&self, visitor: &mut V) -> V::Output {
+                    fn accept<V: Visitor<'s>>(&self, visitor: V) -> V::Output {
                         visitor.$visit_fn(self)
                     }
                 }
@@ -89,12 +89,16 @@ define_ast! {
 
 impl fmt::Display for Expr<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.accept(&mut Printer))
+        write!(f, "{}", self.accept(Printer))
     }
 }
 
 define_ast! {
     mod stmt => Stmt {
+        Block<'s> [visit_block] {
+            statements: Vec<Stmt<'s>>,
+        },
+
         Expression<'s> [visit_expr] {
             expression: expr::Expr<'s>,
         },
@@ -112,7 +116,7 @@ define_ast! {
 
 impl fmt::Display for Stmt<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.accept(&mut Printer))
+        write!(f, "{}", self.accept(Printer))
     }
 }
 
@@ -122,27 +126,27 @@ struct Printer;
 impl expr::Visitor<'_> for Printer {
     type Output = String;
 
-    fn visit_binary(&mut self, v: &expr::Binary) -> Self::Output {
+    fn visit_binary(self, v: &expr::Binary) -> Self::Output {
         format!("({} {} {})", v.operator.info.lexeme, v.left, v.right,)
     }
 
-    fn visit_grouping(&mut self, v: &expr::Grouping) -> Self::Output {
+    fn visit_grouping(self, v: &expr::Grouping) -> Self::Output {
         format!("(group {})", v.expression)
     }
 
-    fn visit_literal(&mut self, v: &expr::Literal) -> Self::Output {
+    fn visit_literal(self, v: &expr::Literal) -> Self::Output {
         format!("{}", v.literal.typ)
     }
 
-    fn visit_unary(&mut self, v: &expr::Unary) -> Self::Output {
+    fn visit_unary(self, v: &expr::Unary) -> Self::Output {
         format!("({} {})", v.operator.info.lexeme, v.right)
     }
 
-    fn visit_variable(&mut self, v: &expr::Variable) -> Self::Output {
+    fn visit_variable(self, v: &expr::Variable) -> Self::Output {
         format!("{}", v.info.lexeme)
     }
 
-    fn visit_assign(&mut self, v: &expr::Assign) -> Self::Output {
+    fn visit_assign(self, v: &expr::Assign) -> Self::Output {
         format!("(assign {} {})", v.info.lexeme, v.value)
     }
 }
@@ -150,19 +154,28 @@ impl expr::Visitor<'_> for Printer {
 impl stmt::Visitor<'_> for Printer {
     type Output = String;
 
-    fn visit_expr(&mut self, v: &stmt::Expression) -> Self::Output {
+    fn visit_expr(self, v: &stmt::Expression) -> Self::Output {
         format!("(expr {})", v.expression)
     }
 
-    fn visit_print(&mut self, v: &stmt::Print) -> Self::Output {
+    fn visit_print(self, v: &stmt::Print) -> Self::Output {
         format!("(print {})", v.expression)
     }
 
-    fn visit_var(&mut self, v: &stmt::Var) -> Self::Output {
+    fn visit_var(self, v: &stmt::Var) -> Self::Output {
         if let Some(initializer) = &v.initializer {
             format!("(define {} {})", v.info.lexeme, initializer)
         } else {
             format!("(define {} nil)", v.info.lexeme)
         }
+    }
+
+    fn visit_block(self, v: &stmt::Block) -> Self::Output {
+        let statements = v
+            .statements
+            .iter()
+            .fold(String::new(), |s, stmt| format!("    {s}{stmt}\n"));
+
+        format!("(block\n{statements})")
     }
 }
