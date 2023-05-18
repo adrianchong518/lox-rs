@@ -23,14 +23,12 @@ impl error_stack::Context for LoxError {}
 fn main() -> error_stack::Result<(), LoxError> {
     let args = env::args().collect::<Vec<_>>();
 
-    let interpreter = interpreter::Interpreter::new();
-
     match args[..] {
         // Run the REPL prompt if no file is provided
-        [_] => run_prompt(interpreter)?,
+        [_] => run_prompt()?,
 
         // Run the provided file
-        [_, ref filepath] => run_file(interpreter, filepath)?,
+        [_, ref filepath] => run_file(filepath)?,
 
         // Malformed usage
         _ => eprintln!("Usage: lox-rs [script]"),
@@ -39,10 +37,11 @@ fn main() -> error_stack::Result<(), LoxError> {
     Ok(())
 }
 
-fn run_prompt(mut interpreter: interpreter::Interpreter) -> error_stack::Result<(), LoxError> {
+fn run_prompt() -> error_stack::Result<(), LoxError> {
     use io::Write as _;
 
     eprintln!("Running prompt...");
+    let mut interpreter = interpreter::Interpreter::new();
 
     let mut line = String::new();
 
@@ -62,7 +61,7 @@ fn run_prompt(mut interpreter: interpreter::Interpreter) -> error_stack::Result<
             .attach_printable("unable to read line from stdin")?
         {
             0 => break,
-            _ => run(&mut interpreter, &line),
+            _ => run(&mut interpreter, &line, true),
         };
 
         if let Err(report) = result {
@@ -73,30 +72,30 @@ fn run_prompt(mut interpreter: interpreter::Interpreter) -> error_stack::Result<
     Ok(())
 }
 
-fn run_file(
-    mut interpreter: interpreter::Interpreter,
-    filepath: impl AsRef<path::Path>,
-) -> error_stack::Result<(), LoxError> {
+fn run_file(filepath: impl AsRef<path::Path>) -> error_stack::Result<(), LoxError> {
     let filepath = filepath.as_ref();
     eprintln!("Running file {}...", filepath.display());
+    let mut interpreter = interpreter::Interpreter::new();
+
     let source = fs::read_to_string(filepath)
         .into_report()
         .change_context(LoxError)
         .attach_printable_lazy(|| format!("unable to read file {filepath:?}"))?;
 
-    run(&mut interpreter, &source)
+    run(&mut interpreter, &source, false)
 }
 
 fn run(
     interpreter: &mut interpreter::Interpreter,
     source: &str,
+    allow_expr: bool,
 ) -> error_stack::Result<(), LoxError> {
     let (tokens, syntax_error) = scanner::scan(source);
     for token in &tokens {
         eprintln!("{token:?}");
     }
 
-    let (statements, parse_error) = parser::parse(tokens);
+    let (found_expr, mut statements, parse_error) = parser::parse(tokens, allow_expr);
     for statement in &statements {
         eprintln!("{statement}")
     }
@@ -114,9 +113,24 @@ fn run(
         (None, None) => {}
     }
 
-    interpreter
-        .interpret(&statements)
-        .change_context(LoxError)?;
+    if found_expr {
+        let Some(ast::Stmt::Expression(last)) = statements.pop() else {
+            return Err(error_stack::report!(LoxError).attach_printable("last statement is not an expression, despite internal flag"));
+        };
+
+        interpreter
+            .interpret(&statements)
+            .change_context(LoxError)?;
+
+        let value = interpreter
+            .evaluate(&last.expression)
+            .change_context(LoxError)?;
+        println!("= {value}");
+    } else {
+        interpreter
+            .interpret(&statements)
+            .change_context(LoxError)?;
+    }
 
     Ok(())
 }

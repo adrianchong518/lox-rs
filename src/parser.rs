@@ -26,11 +26,17 @@ impl error_stack::Context for ParseError {}
 
 pub fn parse(
     tokens: Vec<token::Token<'_>>,
-) -> (Vec<ast::Stmt>, Option<error_stack::Report<ParseError>>) {
+    allow_expr: bool,
+) -> (
+    bool,
+    Vec<ast::Stmt>,
+    Option<error_stack::Report<ParseError>>,
+) {
     let mut statements = Vec::new();
     let mut error: Option<error_stack::Report<ParseError>> = None;
 
-    Parser::new(tokens.into_iter()).for_each(|result| match result {
+    let mut parser = Parser::new(tokens.into_iter(), allow_expr);
+    parser.by_ref().for_each(|result| match result {
         Ok(stmt) => statements.push(stmt),
         Err(report) => match &mut error {
             Some(error) => error.extend_one(report),
@@ -38,7 +44,7 @@ pub fn parse(
         },
     });
 
-    (statements, error)
+    (parser.found_expr, statements, error)
 }
 
 struct Parser<'s, Tokens>
@@ -46,6 +52,8 @@ where
     Tokens: Iterator<Item = token::Token<'s>>,
 {
     tokens: std::iter::Peekable<Tokens>,
+    allow_expr: bool,
+    found_expr: bool,
 }
 
 macro_rules! matches_token {
@@ -99,9 +107,11 @@ impl<'s, Tokens> Parser<'s, Tokens>
 where
     Tokens: Iterator<Item = token::Token<'s>>,
 {
-    pub fn new(tokens: Tokens) -> Self {
+    pub fn new(tokens: Tokens, allow_expr: bool) -> Self {
         Self {
             tokens: tokens.peekable(),
+            allow_expr,
+            found_expr: false,
         }
     }
 
@@ -149,7 +159,13 @@ where
 
     fn expression_statement(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         let expression = self.expression()?;
-        rule!(statement_end(self))?;
+
+        if self.allow_expr && self.tokens.peek().is_none() {
+            self.found_expr = true;
+        } else {
+            rule!(statement_end(self))?;
+        }
+
         Ok(ast::stmt::Expression { expression }.into())
     }
 

@@ -59,7 +59,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn execute(&mut self, statement: &ast::Stmt) -> error_stack::Result<(), RuntimeError> {
+    pub fn execute(&mut self, statement: &ast::Stmt) -> error_stack::Result<(), RuntimeError> {
         statement.accept(self)
     }
 
@@ -73,7 +73,7 @@ impl Interpreter {
         result
     }
 
-    fn evaluate(
+    pub fn evaluate(
         &mut self,
         expression: &ast::Expr,
     ) -> error_stack::Result<object::Object, RuntimeError> {
