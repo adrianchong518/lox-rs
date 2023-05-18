@@ -1,5 +1,7 @@
 use std::fmt;
 
+use itertools::Itertools as _;
+
 use crate::token;
 
 macro_rules! define_ast {
@@ -89,7 +91,7 @@ define_ast! {
 
 impl fmt::Display for Expr<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.accept(Printer))
+        write!(f, "{}", self.accept(&mut Printer::default()))
     }
 }
 
@@ -116,22 +118,35 @@ define_ast! {
 
 impl fmt::Display for Stmt<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.accept(Printer))
+        write!(f, "{}", self.accept(&mut Printer::default()))
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Printer;
+#[derive(Debug, Clone, Copy, Default)]
+struct Printer {
+    indentation: usize,
+}
 
-impl expr::Visitor<'_> for Printer {
+impl Printer {
+    fn indent(&self) -> String {
+        " ".repeat(self.indentation)
+    }
+}
+
+impl expr::Visitor<'_> for &mut Printer {
     type Output = String;
 
     fn visit_binary(self, v: &expr::Binary) -> Self::Output {
-        format!("({} {} {})", v.operator.info.lexeme, v.left, v.right,)
+        format!(
+            "({} {} {})",
+            v.operator.info.lexeme,
+            v.left.accept(&mut *self),
+            v.right.accept(&mut *self),
+        )
     }
 
     fn visit_grouping(self, v: &expr::Grouping) -> Self::Output {
-        format!("(group {})", v.expression)
+        format!("(group {})", v.expression.accept(self))
     }
 
     fn visit_literal(self, v: &expr::Literal) -> Self::Output {
@@ -139,7 +154,7 @@ impl expr::Visitor<'_> for Printer {
     }
 
     fn visit_unary(self, v: &expr::Unary) -> Self::Output {
-        format!("({} {})", v.operator.info.lexeme, v.right)
+        format!("({} {})", v.operator.info.lexeme, v.right.accept(self))
     }
 
     fn visit_variable(self, v: &expr::Variable) -> Self::Output {
@@ -147,35 +162,48 @@ impl expr::Visitor<'_> for Printer {
     }
 
     fn visit_assign(self, v: &expr::Assign) -> Self::Output {
-        format!("(assign {} {})", v.info.lexeme, v.value)
+        format!("(assign {} {})", v.info.lexeme, v.value.accept(self))
     }
 }
 
-impl stmt::Visitor<'_> for Printer {
+impl stmt::Visitor<'_> for &mut Printer {
     type Output = String;
 
     fn visit_expr(self, v: &stmt::Expression) -> Self::Output {
-        format!("(expr {})", v.expression)
+        format!("{}(expr {})", self.indent(), v.expression.accept(self))
     }
 
     fn visit_print(self, v: &stmt::Print) -> Self::Output {
-        format!("(print {})", v.expression)
+        format!("{}(print {})", self.indent(), v.expression.accept(self))
     }
 
     fn visit_var(self, v: &stmt::Var) -> Self::Output {
         if let Some(initializer) = &v.initializer {
-            format!("(define {} {})", v.info.lexeme, initializer)
+            format!(
+                "{}(define {} {})",
+                self.indent(),
+                v.info.lexeme,
+                initializer.accept(self)
+            )
         } else {
-            format!("(define {} nil)", v.info.lexeme)
+            format!("{}(define {} nil)", self.indent(), v.info.lexeme)
         }
     }
 
     fn visit_block(self, v: &stmt::Block) -> Self::Output {
+        self.indentation += 2;
+
+        // TODO: change to std once stable
+        #[allow(unstable_name_collisions)]
         let statements = v
             .statements
             .iter()
-            .fold(String::new(), |s, stmt| format!("    {s}{stmt}\n"));
+            .map(|stmt| stmt.accept(&mut *self))
+            .intersperse("\n".to_string())
+            .fold(String::new(), |acc, x| format!("{acc}{x}"));
 
-        format!("(block\n{statements})")
+        self.indentation -= 2;
+
+        format!("{}(block\n{statements})", self.indent())
     }
 }
