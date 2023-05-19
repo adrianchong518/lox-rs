@@ -54,6 +54,7 @@ where
     tokens: std::iter::Peekable<Tokens>,
     allow_expr: bool,
     found_expr: bool,
+    break_depth: usize,
 }
 
 macro_rules! matches_token {
@@ -107,10 +108,10 @@ macro_rules! rule {
         }
     };
 
-    (statement_end($self:ident)) => {
+    (statement_end($self:ident): $stmt:literal) => {
         rule!(
             consume($self): token::Type::Semicolon,
-            "expect `;` after expression"
+            concat!("expect `;` after ", $stmt)
         )
     };
 }
@@ -124,6 +125,7 @@ where
             tokens: tokens.peekable(),
             allow_expr,
             found_expr: false,
+            break_depth: 0,
         }
     }
 
@@ -148,7 +150,7 @@ where
             None
         };
 
-        rule!(statement_end(self))?;
+        rule!(statement_end(self): "variable declaration")?;
 
         Ok(ast::stmt::Var { info, initializer }.into())
     }
@@ -160,6 +162,8 @@ where
             self.while_statement()
         } else if rule!(next_if_matches(self): token::Type::For).is_some() {
             self.for_statement()
+        } else if let Some(token) = rule!(next_if_matches(self): token::Type::Break) {
+            self.break_statement(token)
         } else if rule!(next_if_matches(self): token::Type::Print).is_some() {
             self.print_statement()
         } else if rule!(next_if_matches(self): token::Type::LeftBrace).is_some() {
@@ -215,7 +219,12 @@ where
             "expect `)` after while condition"
         )?;
 
-        let body = self.statement()?;
+        let body = {
+            self.break_depth += 1;
+            let result = self.statement();
+            self.break_depth -= 1;
+            result?
+        };
 
         Ok(ast::stmt::While { condition, body }.into())
     }
@@ -263,7 +272,12 @@ where
         )?;
 
         let while_body: ast::Stmt = {
-            let body = self.statement()?;
+            let body = {
+                self.break_depth += 1;
+                let result = self.statement();
+                self.break_depth -= 1;
+                result?
+            };
 
             if let Some(inc) = increment {
                 ast::stmt::Block {
@@ -291,13 +305,31 @@ where
         })
     }
 
+    fn break_statement(
+        &mut self,
+        token: token::Token<'s>,
+    ) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
+        rule!(statement_end(self): "`break`")?;
+
+        if self.break_depth == 0 {
+            // NB This deviates from the book as this will **not** return the break statement and continue parsing
+            return Err(error_stack::report!(ParseError {
+                info: Some(token.info.into_owned()),
+                synchronize: false
+            })
+            .attach_printable("`break` can only be used in a loop"));
+        }
+
+        Ok(ast::stmt::Break { info: token.info }.into())
+    }
+
     fn expression_statement(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         let expression = self.expression()?;
 
         if self.allow_expr && self.tokens.peek().is_none() {
             self.found_expr = true;
         } else {
-            rule!(statement_end(self))?;
+            rule!(statement_end(self): "expression")?;
         }
 
         Ok(ast::stmt::Expression { expression }.into())
@@ -339,7 +371,7 @@ where
 
     fn print_statement(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         let expression = self.expression()?;
-        rule!(statement_end(self))?;
+        rule!(statement_end(self): "value")?;
         Ok(ast::stmt::Print { expression }.into())
     }
 

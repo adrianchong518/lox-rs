@@ -44,6 +44,17 @@ impl fmt::Display for RuntimeError {
 
 impl error_stack::Context for RuntimeError {}
 
+#[derive(Debug)]
+struct Break;
+
+impl fmt::Display for Break {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "top-level break")
+    }
+}
+
+impl error_stack::Context for Break {}
+
 impl Interpreter {
     pub fn new() -> Self {
         Self {
@@ -237,9 +248,21 @@ impl ast::stmt::Visitor<'_> for &mut Interpreter {
 
     fn visit_while(self, v: &ast::stmt::While) -> Self::Output {
         while self.evaluate(&v.condition)?.is_truthy() {
-            self.execute(&v.body)?;
+            if let Err(report) = self.execute(&v.body) {
+                if report.downcast_ref::<Break>().is_some() {
+                    break;
+                } else {
+                    return Err(report);
+                }
+            }
         }
 
         Ok(())
+    }
+
+    fn visit_break(self, v: &ast::stmt::Break) -> Self::Output {
+        Err(error_stack::report!(Break).change_context(RuntimeError {
+            info: v.info.clone().into_owned(),
+        }))
     }
 }

@@ -111,6 +111,8 @@ pub enum Type {
 
     /// `and`
     And,
+    /// `break`
+    Break,
     /// `class`
     Class,
     /// `else`
@@ -141,6 +143,7 @@ impl Type {
     pub fn try_from_keyword(text: &str) -> Option<Self> {
         Some(match text {
             "and" => Self::And,
+            "break" => Self::Break,
             "class" => Self::Class,
             "else" => Self::Else,
             "false" => Self::Literal(LiteralType::False),

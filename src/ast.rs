@@ -107,6 +107,10 @@ define_ast! {
             statements: Vec<Stmt<'s>>,
         },
 
+        Break<'s> [visit_break] {
+            info: token::Info<'s>
+        },
+
         Expression<'s> [visit_expr] {
             expression: expr::Expr<'s>,
         },
@@ -216,6 +220,10 @@ impl stmt::Visitor<'_> for &mut Printer {
         self.indentation -= 2;
 
         format!("{}(block\n{statements})", self.indent())
+    }
+
+    fn visit_break(self, _: &stmt::Break) -> Self::Output {
+        format!("{}(break)", self.indent())
     }
 
     fn visit_expr(self, v: &stmt::Expression) -> Self::Output {
