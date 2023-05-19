@@ -115,7 +115,8 @@ fn run(
 
     if found_expr {
         let Some(ast::Stmt::Expression(last)) = statements.pop() else {
-            return Err(error_stack::report!(LoxError).attach_printable("last statement is not an expression, despite internal flag"));
+            return Err(error_stack::report!(LoxError)
+                .attach_printable("last statement is not an expression, despite internal flag"));
         };
 
         interpreter

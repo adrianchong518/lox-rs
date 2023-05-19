@@ -84,6 +84,17 @@ impl Interpreter {
 impl ast::expr::Visitor<'_> for &mut Interpreter {
     type Output = error_stack::Result<object::Object, RuntimeError>;
 
+    fn visit_assign(self, v: &ast::expr::Assign) -> Self::Output {
+        let value = self.evaluate(&v.value)?;
+        self.environment
+            .assign(&v.info, value.clone())
+            .change_context(RuntimeError {
+                info: v.info.clone().into_owned(),
+            })?;
+
+        Ok(value)
+    }
+
     fn visit_binary(self, v: &ast::expr::Binary) -> Self::Output {
         let left = self.evaluate(&v.left)?;
         let right = self.evaluate(&v.right)?;
@@ -132,6 +143,26 @@ impl ast::expr::Visitor<'_> for &mut Interpreter {
         Ok(object::Object::from(v.literal.typ.clone()))
     }
 
+    fn visit_logical(self, v: &ast::expr::Logical) -> Self::Output {
+        let left = self.evaluate(&v.left)?;
+
+        match v.operator.typ {
+            token::Type::Or => {
+                if left.is_truthy() {
+                    return Ok(left);
+                }
+            }
+            token::Type::And => {
+                if !left.is_truthy() {
+                    return Ok(left);
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        self.evaluate(&v.right)
+    }
+
     fn visit_unary(self, v: &ast::expr::Unary) -> Self::Output {
         let right = self.evaluate(&v.right)?;
 
@@ -163,25 +194,28 @@ impl ast::expr::Visitor<'_> for &mut Interpreter {
 
         Ok(value.clone())
     }
-
-    fn visit_assign(self, v: &ast::expr::Assign) -> Self::Output {
-        let value = self.evaluate(&v.value)?;
-        self.environment
-            .assign(&v.info, value.clone())
-            .change_context(RuntimeError {
-                info: v.info.clone().into_owned(),
-            })?;
-
-        Ok(value)
-    }
 }
 
 impl ast::stmt::Visitor<'_> for &mut Interpreter {
     type Output = error_stack::Result<(), RuntimeError>;
 
+    fn visit_block(self, v: &ast::stmt::Block) -> Self::Output {
+        self.execute_block(&v.statements)
+    }
+
     fn visit_expr(self, v: &ast::stmt::Expression) -> Self::Output {
         self.evaluate(&v.expression)?;
         Ok(())
+    }
+
+    fn visit_if(self, v: &ast::stmt::If) -> Self::Output {
+        if self.evaluate(&v.condition)?.is_truthy() {
+            self.execute(&v.then_branch)
+        } else if let Some(else_branch) = &v.else_branch {
+            self.execute(else_branch)
+        } else {
+            Ok(())
+        }
     }
 
     fn visit_print(self, v: &ast::stmt::Print) -> Self::Output {
@@ -201,7 +235,11 @@ impl ast::stmt::Visitor<'_> for &mut Interpreter {
         Ok(())
     }
 
-    fn visit_block(self, v: &ast::stmt::Block) -> Self::Output {
-        self.execute_block(&v.statements)
+    fn visit_while(self, v: &ast::stmt::While) -> Self::Output {
+        while self.evaluate(&v.condition)?.is_truthy() {
+            self.execute(&v.body)?;
+        }
+
+        Ok(())
     }
 }
