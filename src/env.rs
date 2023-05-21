@@ -13,13 +13,13 @@ impl fmt::Display for EnvironmentError {
 
 impl error_stack::Context for EnvironmentError {}
 
-pub type ContextRef = Rc<RefCell<Context>>;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Context {
     values: HashMap<String, object::Object>,
     parent: Option<ContextRef>,
 }
+
+pub type ContextRef = Rc<RefCell<Context>>;
 
 impl Context {
     pub fn new() -> Self {

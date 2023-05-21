@@ -22,9 +22,22 @@ impl error_stack::Context for ResolutionError {}
 pub type ResolveMap<'s> = HashMap<token::Info<'s>, usize>;
 
 #[derive(Debug)]
+pub struct Variable<'s> {
+    name: token::Info<'s>,
+    state: VariableState,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum VariableState {
+    Declared,
+    Defined,
+    Read,
+}
+
+#[derive(Debug)]
 pub struct Resolver<'s, 'a> {
     interpreter: &'a mut interpreter::Interpreter<'s>,
-    scopes: Vec<HashMap<Cow<'s, str>, bool>>,
+    scopes: Vec<HashMap<Cow<'s, str>, Variable<'s>>>,
     current_function: Option<FunctionType>,
 }
 
@@ -46,8 +59,32 @@ impl<'s, 'a> Resolver<'s, 'a> {
         self.scopes.push(HashMap::new());
     }
 
-    fn end_scope(&mut self) {
-        self.scopes.pop();
+    fn end_scope(&mut self) -> error_stack::Result<(), ResolutionError> {
+        let Some(scope) = self.scopes.pop() else {
+            return Ok(())
+        };
+
+        let mut error: Option<error_stack::Report<ResolutionError>> = None;
+
+        for var in scope.into_values() {
+            if var.state == VariableState::Defined {
+                let report = error_stack::report!(ResolutionError {
+                    info: var.name.into_owned()
+                })
+                .attach_printable("local variable is not used");
+
+                match error.as_mut() {
+                    Some(e) => e.extend_one(report),
+                    None => error = Some(report),
+                }
+            }
+        }
+
+        if let Some(error) = error {
+            Err(error)
+        } else {
+            Ok(())
+        }
     }
 
     fn with_scope(
@@ -56,7 +93,7 @@ impl<'s, 'a> Resolver<'s, 'a> {
     ) -> error_stack::Result<(), ResolutionError> {
         self.begin_scope();
         f(self)?;
-        self.end_scope();
+        self.end_scope()?;
 
         Ok(())
     }
@@ -109,15 +146,19 @@ impl<'s, 'a> Resolver<'s, 'a> {
         }
     }
 
-    fn resolve_local(&mut self, name: token::Info<'s>) {
-        if let Some((distance, _)) = self
+    fn resolve_local(&mut self, name: token::Info<'s>, is_read: bool) {
+        if let Some((distance, scope)) = self
             .scopes
-            .iter()
+            .iter_mut()
             .rev()
             .enumerate()
             .find(|(_, scope)| scope.contains_key(&name.lexeme))
         {
-            self.interpreter.resolve(name, distance)
+            if is_read {
+                scope.get_mut(&name.lexeme).unwrap().state = VariableState::Read;
+            }
+
+            self.interpreter.resolve(name, distance);
         }
     }
 
@@ -143,16 +184,28 @@ impl<'s, 'a> Resolver<'s, 'a> {
                 })
                 .attach_printable("variable with the same name already declared in this scope"));
             }
-            scope.insert(name.lexeme.clone(), false);
+            scope.insert(
+                name.lexeme.clone(),
+                Variable {
+                    name: name.clone(),
+                    state: VariableState::Declared,
+                },
+            );
         }
 
         Ok(())
     }
 
     fn define(&mut self, name: &token::Info<'s>) {
-        self.scopes
-            .last_mut()
-            .and_then(|scope| scope.insert(name.lexeme.clone(), true));
+        self.scopes.last_mut().and_then(|scope| {
+            scope.insert(
+                name.lexeme.clone(),
+                Variable {
+                    name: name.clone(),
+                    state: VariableState::Defined,
+                },
+            )
+        });
     }
 }
 
@@ -161,7 +214,7 @@ impl<'s> ast::expr::Visitor<'s> for &mut Resolver<'s, '_> {
 
     fn visit_assign(self, v: &ast::expr::Assign<'s>) -> Self::Output {
         self.resolve_expr(&v.value)?;
-        self.resolve_local(v.info.clone());
+        self.resolve_local(v.info.clone(), false);
         Ok(())
     }
 
@@ -204,7 +257,7 @@ impl<'s> ast::expr::Visitor<'s> for &mut Resolver<'s, '_> {
             .scopes
             .last()
             .and_then(|scope| scope.get(&v.info.lexeme))
-            .map(|b| !b)
+            .map(|v| v.state == VariableState::Declared)
             .unwrap_or(false)
         {
             return Err(error_stack::report!(ResolutionError {
@@ -213,7 +266,7 @@ impl<'s> ast::expr::Visitor<'s> for &mut Resolver<'s, '_> {
             .attach_printable("cannot read local variable in its own initializer"));
         }
 
-        self.resolve_local(v.info.clone());
+        self.resolve_local(v.info.clone(), true);
         Ok(())
     }
 
