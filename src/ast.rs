@@ -123,7 +123,13 @@ define_ast! {
 
         Variable<'s> [visit_variable] {
             info: token::Info<'s>
-        }
+        },
+
+        Function<'s> [visit_function] {
+            keyword: token::Info<'s>,
+            parameters: Vec<token::Info<'s>>,
+            body: stmt::Block<'s>,
+        },
     }
 }
 
@@ -148,9 +154,8 @@ define_ast! {
         },
 
         Function<'s> [visit_function] {
-            info: token::Info<'s>,
-            parameters: Vec<token::Info<'s>>,
-            body: Block<'s>,
+            name: token::Info<'s>,
+            function: expr::Function<'s>,
         },
 
         If<'s> [visit_if] {
@@ -225,11 +230,10 @@ impl expr::Visitor for &mut Printer {
         let arguments = v
             .arguments
             .iter()
-            .map(|expr| expr.accept(&mut *self))
-            .intersperse(" ".to_string())
+            .map(|expr| format!(" {}", expr.accept(&mut *self)))
             .fold(String::new(), |acc, x| format!("{acc}{x}"));
 
-        format!("({} {arguments})", v.callee.accept(self))
+        format!("({}{arguments})", v.callee.accept(self))
     }
 
     fn visit_grouping(self, v: &expr::Grouping<'_>) -> Self::Output {
@@ -255,6 +259,23 @@ impl expr::Visitor for &mut Printer {
 
     fn visit_variable(self, v: &expr::Variable<'_>) -> Self::Output {
         format!("{}", v.info.lexeme)
+    }
+
+    fn visit_function(self, v: &expr::Function<'_>) -> Self::Output {
+        // TODO: change to std once stable
+        #[allow(unstable_name_collisions)]
+        let parameters = v
+            .parameters
+            .iter()
+            .map(|info| &*info.lexeme)
+            .intersperse(" ")
+            .fold(String::new(), |acc, x| format!("{acc}{x}"));
+
+        self.indentation += 2;
+        let body = v.body.accept(&mut *self);
+        self.indentation -= 2;
+
+        format!("(fn ({parameters})\n{body})")
     }
 }
 
@@ -287,23 +308,14 @@ impl stmt::Visitor for &mut Printer {
     }
 
     fn visit_function(self, v: &stmt::Function<'_>) -> Self::Output {
-        // TODO: change to std once stable
-        #[allow(unstable_name_collisions)]
-        let parameters = v
-            .parameters
-            .iter()
-            .map(|info| &*info.lexeme)
-            .intersperse(" ")
-            .fold(String::new(), |acc, x| format!("{acc}{x}"));
-
         self.indentation += 2;
-        let body = v.body.accept(&mut *self);
+        let function = v.function.accept(&mut *self);
         self.indentation -= 2;
 
         format!(
-            "{}(define ({} {parameters})\n{body})",
+            "{}(define {}\n{0}  {function})",
             self.indent(),
-            v.info.lexeme,
+            v.name.lexeme
         )
     }
 

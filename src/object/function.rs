@@ -1,18 +1,27 @@
 use std::fmt;
 
-use crate::{ast, env, interpreter, object::callable};
+use crate::{ast, env, interpreter, object::callable, token};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
-    declaration: ast::stmt::Function<'static>,
+    name: Option<token::Info<'static>>,
+    declaration: ast::expr::Function<'static>,
     closure: env::ContextRef,
 }
 
 impl Function {
-    pub fn new(decl: &ast::stmt::Function<'_>, closure: env::ContextRef) -> Self {
+    pub fn new(decl: &ast::expr::Function<'_>, closure: env::ContextRef) -> Self {
         Self {
+            name: None,
             declaration: decl.clone().into_owned(),
             closure,
+        }
+    }
+
+    pub fn attach_name(self, name: token::Info<'static>) -> Self {
+        Self {
+            name: Some(name),
+            ..self
         }
     }
 }
@@ -46,7 +55,11 @@ impl super::callable::Callable for Function {
 
 impl fmt::Display for Function {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<fn {}>", self.declaration.info.lexeme)
+        if let Some(name) = &self.name {
+            write!(f, "<fn {}>", name.lexeme)
+        } else {
+            write!(f, "<fn>")
+        }
     }
 }
 

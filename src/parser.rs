@@ -1,6 +1,6 @@
 use std::fmt;
 
-use itertools::Itertools as _;
+use itertools::{Itertools as _, PeekingNext as _};
 
 use crate::{ast, into_owned::IntoOwned as _, token};
 
@@ -52,7 +52,7 @@ struct Parser<'s, Tokens>
 where
     Tokens: Iterator<Item = token::Token<'s>>,
 {
-    tokens: std::iter::Peekable<Tokens>,
+    tokens: itertools::PeekNth<Tokens>,
     error: Option<error_stack::Report<ParseError>>,
     allow_expr: bool,
     found_expr: bool,
@@ -67,7 +67,7 @@ macro_rules! matches_token {
 
 macro_rules! rule {
     (next_if_matches($self:ident): $token_pat:pat) => {
-        $self.tokens.next_if(|t| matches_token!(t, $token_pat))
+        $self.tokens.peeking_next(|t| matches_token!(t, $token_pat))
     };
 
     (peek_matches($self:ident): $token_pat:pat) => {
@@ -80,6 +80,12 @@ macro_rules! rule {
         $self.tokens
             .peek()
             .map(|t| !matches_token!(t, $token_pat))
+    };
+
+    (peek_nth_matches($self:ident, $n:expr): $token_pat:pat) => {
+        $self.tokens
+            .peek_nth($n)
+            .map(|t| matches_token!(t, $token_pat))
     };
 
     (infix($($expr_type:tt)*): $rule:ident => $next_rule:ident, $token_pat:pat) => {
@@ -124,7 +130,7 @@ where
 {
     pub fn new(tokens: Tokens, allow_expr: bool) -> Self {
         Self {
-            tokens: tokens.peekable(),
+            tokens: itertools::peek_nth(tokens),
             error: None,
             allow_expr,
             found_expr: false,
@@ -132,14 +138,19 @@ where
         }
     }
 
-    fn delcaration(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
+    fn declaration(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         if rule!(next_if_matches(self): token::Type::Var).is_some() {
-            self.var_declaration()
-        } else if rule!(next_if_matches(self): token::Type::Fun).is_some() {
-            self.function("function")
-        } else {
-            self.statement()
+            return self.var_declaration();
         }
+
+        if rule!(peek_matches(self): token::Type::Fun).unwrap_or(false)
+            && rule!(peek_nth_matches(self, 1): token::Type::Identifier).unwrap_or(false)
+        {
+            let keyword = self.tokens.next().unwrap();
+            return self.function(keyword, "function");
+        }
+
+        self.statement()
     }
 
     fn var_declaration(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
@@ -262,10 +273,7 @@ where
             .into()
         };
 
-        rule!(
-            consume(self): token::Type::Semicolon,
-            "expect `;` after loop condition"
-        )?;
+        rule!(statement_end(self): "loop condition")?;
 
         let increment = if rule!(!peek_matches(self): token::Type::RightParen).unwrap_or(true) {
             Some(self.expression()?)
@@ -361,13 +369,29 @@ where
         Ok(ast::stmt::Expression { expression }.into())
     }
 
-    fn function(&mut self, kind: &str) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
-        let info = rule!(
+    fn function(
+        &mut self,
+        keyword: token::Token<'s>,
+        kind: &str,
+    ) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
+        let name = rule!(
             consume(self): token::Type::Identifier,
             format!("expect {kind} name")
         )?
         .info;
 
+        Ok(ast::stmt::Function {
+            name,
+            function: self.function_body(keyword, kind)?,
+        }
+        .into())
+    }
+
+    fn function_body(
+        &mut self,
+        keyword: token::Token<'s>,
+        kind: &str,
+    ) -> error_stack::Result<ast::expr::Function<'s>, ParseError> {
         rule!(
             consume(self): token::Type::LeftParen,
             format!("expect `(` after {kind} name")
@@ -412,12 +436,11 @@ where
             return Err(error);
         }
 
-        Ok(ast::stmt::Function {
-            info,
+        Ok(ast::expr::Function {
+            keyword: keyword.info,
             parameters,
             body,
-        }
-        .into())
+        })
     }
 
     fn block(
@@ -430,7 +453,7 @@ where
         let mut error: Option<error_stack::Report<ParseError>> = None;
 
         while rule!(!peek_matches(self): token::Type::RightBrace).unwrap_or(false) {
-            let result = self.delcaration();
+            let result = self.declaration();
             match result {
                 Ok(stmt) => statements.push(stmt),
                 Err(report) => match &mut error {
@@ -585,6 +608,10 @@ where
             return Ok(ast::expr::Grouping { expression }.into());
         }
 
+        if let Some(keyword) = rule!(next_if_matches(self): token::Type::Fun) {
+            return Ok(self.function_body(keyword, "function")?.into());
+        }
+
         Err(self.error().attach_printable("expect expression"))
     }
 
@@ -633,7 +660,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.tokens.peek().is_some() {
-            Some(self.delcaration().map_err(|e| {
+            Some(self.declaration().map_err(|e| {
                 self.synchronize();
                 e
             }))

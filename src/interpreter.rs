@@ -312,6 +312,10 @@ impl ast::expr::Visitor for &mut Interpreter {
 
         Ok(value)
     }
+
+    fn visit_function(self, v: &ast::expr::Function<'_>) -> Self::Output {
+        Ok(object::Function::new(v, self.environment.current_context().clone()).into())
+    }
 }
 
 impl ast::stmt::Visitor for &mut Interpreter {
@@ -331,9 +335,14 @@ impl ast::stmt::Visitor for &mut Interpreter {
     }
 
     fn visit_function(self, v: &ast::stmt::Function<'_>) -> Self::Output {
-        let function = object::Function::new(v, self.environment.current_context().clone()).into();
+        let function =
+            object::Function::new(&v.function, self.environment.current_context().clone())
+                .attach_name(v.name.clone().into_owned())
+                .into();
+
         self.environment
-            .define(v.info.lexeme.clone().into_owned(), function);
+            .define(v.name.lexeme.clone().into_owned(), function);
+
         Ok(())
     }
 
