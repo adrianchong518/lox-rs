@@ -2,7 +2,7 @@ use std::fmt;
 
 use itertools::Itertools as _;
 
-use crate::token;
+use crate::{into_owned::IntoOwned, token};
 
 macro_rules! define_ast {
     (
@@ -17,33 +17,59 @@ macro_rules! define_ast {
         pub mod $base_mod {
             use super::*;
 
-            pub trait Visitor<'s> {
+            pub trait Visitor {
                 type Output;
-                $( fn $visit_fn(self, v: &$typ<'s>) -> Self::Output; )*
+                $( fn $visit_fn(self, v: &$typ<'_>) -> Self::Output; )*
             }
 
-            #[derive(Debug)]
+            #[derive(Debug, Clone, PartialEq)]
             pub enum $base<'s> {
                 $( $typ(Box<$typ<'s>>), )*
             }
 
             impl<'s> $base<'s> {
-                pub fn accept<V: Visitor<'s>>(&self, visitor: V) -> V::Output {
+                pub fn accept<V: Visitor>(&self, visitor: V) -> V::Output {
                     match self {
                         $( Self::$typ(v) => v.accept(visitor), )*
                     }
                 }
             }
 
+            impl IntoOwned for $base<'_> {
+                    type Owned = $base<'static>;
+
+                fn into_owned(self) -> Self::Owned {
+                    match self {
+                        $(Self::$typ(v) => v.into_owned().into(),)*
+                    }
+                }
+            }
+
             $(
-                #[derive(Debug)]
+                #[derive(Debug, Clone, PartialEq)]
                 pub struct $typ<$lt> {
                     $( pub $field: $field_type, )*
                 }
 
                 impl<'s> $typ<'s> {
-                    fn accept<V: Visitor<'s>>(&self, visitor: V) -> V::Output {
+                    pub fn accept<V: Visitor>(&self, visitor: V) -> V::Output {
                         visitor.$visit_fn(self)
+                    }
+
+                    pub fn into_owned(self) -> $typ<'static> {
+                        $typ {
+                            $( $field: self.$field.into_owned(), )*
+                        }
+                    }
+                }
+
+                impl IntoOwned for $typ<'_> {
+                    type Owned = $typ<'static>;
+
+                    fn into_owned(self) -> Self::Owned {
+                        $typ {
+                            $( $field: self.$field.into_owned(), )*
+                        }
                     }
                 }
 
@@ -68,6 +94,12 @@ define_ast! {
             left: Expr<'s>,
             operator: token::Token<'s>,
             right: Expr<'s>,
+        },
+
+        Call<'s> [visit_call] {
+            callee: Expr<'s>,
+            right_paren: token::Token<'s>,
+            arguments: Vec<Expr<'s>>,
         },
 
         Grouping<'s> [visit_grouping] {
@@ -108,15 +140,21 @@ define_ast! {
         },
 
         Break<'s> [visit_break] {
-            info: token::Info<'s>
+            info: token::Info<'s>,
         },
 
         Expression<'s> [visit_expr] {
-            expression: expr::Expr<'s>,
+            expression: Expr<'s>,
+        },
+
+        Function<'s> [visit_function] {
+            info: token::Info<'s>,
+            parameters: Vec<token::Info<'s>>,
+            body: Block<'s>,
         },
 
         If<'s> [visit_if] {
-            condition: expr::Expr<'s>,
+            condition: Expr<'s>,
             then_branch: Stmt<'s>,
             else_branch: Option<Stmt<'s>>,
         },
@@ -125,13 +163,18 @@ define_ast! {
             expression: expr::Expr<'s>,
         },
 
+        Return<'s> [visit_return] {
+            keyword: token::Info<'s>,
+            value: Option<Expr<'s>>,
+        },
+
         Var<'s> [visit_var] {
             info: token::Info<'s>,
             initializer: Option<expr::Expr<'s>>,
         },
 
         While<'s> [visit_while] {
-            condition: expr::Expr<'s>,
+            condition: Expr<'s>,
             body: Stmt<'s>,
         },
     }
@@ -160,14 +203,14 @@ impl Printer {
     }
 }
 
-impl expr::Visitor<'_> for &mut Printer {
+impl expr::Visitor for &mut Printer {
     type Output = String;
 
-    fn visit_assign(self, v: &expr::Assign) -> Self::Output {
-        format!("(assign {} {})", v.info.lexeme, v.value.accept(self))
+    fn visit_assign(self, v: &expr::Assign<'_>) -> Self::Output {
+        format!("(set! {} {})", v.info.lexeme, v.value.accept(self))
     }
 
-    fn visit_binary(self, v: &expr::Binary) -> Self::Output {
+    fn visit_binary(self, v: &expr::Binary<'_>) -> Self::Output {
         format!(
             "({} {} {})",
             v.operator.info.lexeme,
@@ -176,15 +219,28 @@ impl expr::Visitor<'_> for &mut Printer {
         )
     }
 
-    fn visit_grouping(self, v: &expr::Grouping) -> Self::Output {
-        format!("(group {})", v.expression.accept(self))
+    fn visit_call(self, v: &expr::Call<'_>) -> Self::Output {
+        // TODO: change to std once stable
+        #[allow(unstable_name_collisions)]
+        let arguments = v
+            .arguments
+            .iter()
+            .map(|expr| expr.accept(&mut *self))
+            .intersperse(" ".to_string())
+            .fold(String::new(), |acc, x| format!("{acc}{x}"));
+
+        format!("({} {arguments})", v.callee.accept(self))
     }
 
-    fn visit_literal(self, v: &expr::Literal) -> Self::Output {
+    fn visit_grouping(self, v: &expr::Grouping<'_>) -> Self::Output {
+        format!("({})", v.expression.accept(self))
+    }
+
+    fn visit_literal(self, v: &expr::Literal<'_>) -> Self::Output {
         format!("{}", v.literal.typ)
     }
 
-    fn visit_logical(self, v: &expr::Logical) -> Self::Output {
+    fn visit_logical(self, v: &expr::Logical<'_>) -> Self::Output {
         format!(
             "({} {} {})",
             v.operator.info.lexeme,
@@ -193,19 +249,19 @@ impl expr::Visitor<'_> for &mut Printer {
         )
     }
 
-    fn visit_unary(self, v: &expr::Unary) -> Self::Output {
+    fn visit_unary(self, v: &expr::Unary<'_>) -> Self::Output {
         format!("({} {})", v.operator.info.lexeme, v.right.accept(self))
     }
 
-    fn visit_variable(self, v: &expr::Variable) -> Self::Output {
+    fn visit_variable(self, v: &expr::Variable<'_>) -> Self::Output {
         format!("{}", v.info.lexeme)
     }
 }
 
-impl stmt::Visitor<'_> for &mut Printer {
+impl stmt::Visitor for &mut Printer {
     type Output = String;
 
-    fn visit_block(self, v: &stmt::Block) -> Self::Output {
+    fn visit_block(self, v: &stmt::Block<'_>) -> Self::Output {
         self.indentation += 2;
 
         // TODO: change to std once stable
@@ -219,18 +275,39 @@ impl stmt::Visitor<'_> for &mut Printer {
 
         self.indentation -= 2;
 
-        format!("{}(block\n{statements})", self.indent())
+        format!("{}(begin\n{statements})", self.indent())
     }
 
-    fn visit_break(self, _: &stmt::Break) -> Self::Output {
+    fn visit_break(self, _: &stmt::Break<'_>) -> Self::Output {
         format!("{}(break)", self.indent())
     }
 
-    fn visit_expr(self, v: &stmt::Expression) -> Self::Output {
-        format!("{}(expr {})", self.indent(), v.expression.accept(self))
+    fn visit_expr(self, v: &stmt::Expression<'_>) -> Self::Output {
+        format!("{}{}", self.indent(), v.expression.accept(self))
     }
 
-    fn visit_if(self, v: &stmt::If) -> Self::Output {
+    fn visit_function(self, v: &stmt::Function<'_>) -> Self::Output {
+        // TODO: change to std once stable
+        #[allow(unstable_name_collisions)]
+        let parameters = v
+            .parameters
+            .iter()
+            .map(|info| &*info.lexeme)
+            .intersperse(" ")
+            .fold(String::new(), |acc, x| format!("{acc}{x}"));
+
+        self.indentation += 2;
+        let body = v.body.accept(&mut *self);
+        self.indentation -= 2;
+
+        format!(
+            "{}(define ({} {parameters})\n{body})",
+            self.indent(),
+            v.info.lexeme,
+        )
+    }
+
+    fn visit_if(self, v: &stmt::If<'_>) -> Self::Output {
         self.indentation += 2;
         let then_branch = v.then_branch.accept(&mut *self);
         let else_branch = v.else_branch.as_ref().map(|s| s.accept(&mut *self));
@@ -247,11 +324,19 @@ impl stmt::Visitor<'_> for &mut Printer {
         }
     }
 
-    fn visit_print(self, v: &stmt::Print) -> Self::Output {
+    fn visit_print(self, v: &stmt::Print<'_>) -> Self::Output {
         format!("{}(print {})", self.indent(), v.expression.accept(self))
     }
 
-    fn visit_var(self, v: &stmt::Var) -> Self::Output {
+    fn visit_return(self, v: &stmt::Return<'_>) -> Self::Output {
+        if let Some(value) = &v.value {
+            format!("{}(return {value})", self.indent())
+        } else {
+            format!("{}(return)", self.indent())
+        }
+    }
+
+    fn visit_var(self, v: &stmt::Var<'_>) -> Self::Output {
         if let Some(initializer) = &v.initializer {
             format!(
                 "{}(define {} {})",
@@ -264,10 +349,10 @@ impl stmt::Visitor<'_> for &mut Printer {
         }
     }
 
-    fn visit_while(self, v: &stmt::While) -> Self::Output {
-        self.indentation += 2;
+    fn visit_while(self, v: &stmt::While<'_>) -> Self::Output {
+        self.indentation += 7;
         let body = v.body.accept(&mut *self);
-        self.indentation -= 2;
+        self.indentation -= 7;
 
         format!(
             "{}(while {}\n{body})",

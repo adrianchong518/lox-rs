@@ -1,11 +1,13 @@
 mod ast;
+mod env;
 mod interpreter;
+mod into_owned;
 mod object;
 mod parser;
 mod scanner;
 mod token;
 
-use std::{env, fmt, fs, io, path};
+use std::{fmt, fs, io, path};
 
 use error_stack::{IntoReport as _, ResultExt as _};
 
@@ -21,7 +23,9 @@ impl fmt::Display for LoxError {
 impl error_stack::Context for LoxError {}
 
 fn main() -> error_stack::Result<(), LoxError> {
-    let args = env::args().collect::<Vec<_>>();
+    error_stack::Report::set_color_mode(error_stack::fmt::ColorMode::Color);
+
+    let args = std::env::args().collect::<Vec<_>>();
 
     match args[..] {
         // Run the REPL prompt if no file is provided
@@ -124,7 +128,7 @@ fn run(
             .change_context(LoxError)?;
 
         let value = interpreter
-            .evaluate(&last.expression)
+            .repl_evaluate(&last.expression)
             .change_context(LoxError)?;
         println!("= {value}");
     } else {

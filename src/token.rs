@@ -1,24 +1,26 @@
 use std::{borrow::Cow, fmt};
 
-#[derive(Debug, Clone)]
+use crate::into_owned::IntoOwned;
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Info<'s> {
     pub lexeme: Cow<'s, str>,
     pub line: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token<'s> {
     pub typ: Type,
     pub info: Info<'s>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Literal<'s> {
     pub typ: LiteralType,
     pub info: Info<'s>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LiteralType {
     Number(f64),
     String(String),
@@ -31,8 +33,10 @@ pub enum LiteralType {
     Nil,
 }
 
-impl Token<'_> {
-    pub fn into_owned(self) -> Token<'static> {
+impl IntoOwned for Token<'_> {
+    type Owned = Token<'static>;
+
+    fn into_owned(self) -> Self::Owned {
         Token {
             typ: self.typ,
             info: self.info.into_owned(),
@@ -40,11 +44,24 @@ impl Token<'_> {
     }
 }
 
-impl Info<'_> {
-    pub fn into_owned(self) -> Info<'static> {
+impl IntoOwned for Info<'_> {
+    type Owned = Info<'static>;
+
+    fn into_owned(self) -> Self::Owned {
         Info {
             lexeme: Cow::from(self.lexeme.into_owned()),
             line: self.line,
+        }
+    }
+}
+
+impl IntoOwned for Literal<'_> {
+    type Owned = Literal<'static>;
+
+    fn into_owned(self) -> Self::Owned {
+        Literal {
+            typ: self.typ,
+            info: self.info.into_owned(),
         }
     }
 }
@@ -61,7 +78,7 @@ impl fmt::Display for LiteralType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub enum Type {
     // single character tokens (with no ambiguity)

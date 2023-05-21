@@ -1,3 +1,10 @@
+pub mod callable;
+pub mod clock_fn;
+pub mod function;
+
+pub use clock_fn::ClockFn;
+pub use function::Function;
+
 use std::fmt;
 
 use crate::token;
@@ -7,6 +14,7 @@ pub enum Object {
     Number(f64),
     String(String),
     Bool(bool),
+    Callable(callable::CallableObject),
     Nil,
 }
 
@@ -22,11 +30,22 @@ impl Object {
 
 impl fmt::Display for Object {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Object::Number(n) => write!(f, "{n}"),
-            Object::String(s) => write!(f, "{s}"),
-            Object::Bool(b) => write!(f, "{b}"),
-            Object::Nil => write!(f, "nil"),
+        if f.alternate() {
+            match self {
+                Self::Number(_) => write!(f, "number"),
+                Self::String(_) => write!(f, "string"),
+                Self::Bool(_) => write!(f, "boolean"),
+                Self::Callable(c) => write!(f, "{c:#}"),
+                Self::Nil => write!(f, "nil"),
+            }
+        } else {
+            match self {
+                Self::Number(n) => write!(f, "{n}"),
+                Self::String(s) => write!(f, "{s}"),
+                Self::Bool(b) => write!(f, "{b}"),
+                Self::Callable(c) => write!(f, "{c}"),
+                Self::Nil => write!(f, "nil"),
+            }
         }
     }
 }
@@ -58,5 +77,14 @@ impl From<String> for Object {
 impl From<bool> for Object {
     fn from(value: bool) -> Self {
         Self::Bool(value)
+    }
+}
+
+impl<T> From<T> for Object
+where
+    T: Into<callable::CallableObject>,
+{
+    fn from(value: T) -> Self {
+        Self::Callable(value.into())
     }
 }

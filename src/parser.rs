@@ -1,15 +1,12 @@
 use std::fmt;
 
-use error_stack::ResultExt as _;
 use itertools::Itertools as _;
-use result_inspect::ResultInspectErr as _;
 
-use crate::{ast, token};
+use crate::{ast, into_owned::IntoOwned as _, token};
 
 #[derive(Debug)]
 pub struct ParseError {
     info: Option<token::Info<'static>>,
-    synchronize: bool,
 }
 
 impl fmt::Display for ParseError {
@@ -44,7 +41,11 @@ pub fn parse(
         },
     });
 
-    (parser.found_expr, statements, error)
+    if let Some(error) = error {
+        parser.report(error);
+    }
+
+    (parser.found_expr, statements, parser.error)
 }
 
 struct Parser<'s, Tokens>
@@ -52,6 +53,7 @@ where
     Tokens: Iterator<Item = token::Token<'s>>,
 {
     tokens: std::iter::Peekable<Tokens>,
+    error: Option<error_stack::Report<ParseError>>,
     allow_expr: bool,
     found_expr: bool,
     break_depth: usize,
@@ -80,7 +82,7 @@ macro_rules! rule {
             .map(|t| !matches_token!(t, $token_pat))
     };
 
-    (binary($($expr_type:tt)*): $rule:ident => $next_rule:ident, $token_pat:pat) => {
+    (infix($($expr_type:tt)*): $rule:ident => $next_rule:ident, $token_pat:pat) => {
         fn $rule(&mut self) -> error_stack::Result<ast::Expr<'s>, ParseError> {
             let mut expr = self.$next_rule()?;
 
@@ -104,7 +106,7 @@ macro_rules! rule {
         if let Some(token) = rule!(next_if_matches($self): $token_pat) {
             Ok(token)
         } else {
-            Err($self.error(true).attach_printable($error_msg))
+            Err($self.error().attach_printable($error_msg))
         }
     };
 
@@ -123,6 +125,7 @@ where
     pub fn new(tokens: Tokens, allow_expr: bool) -> Self {
         Self {
             tokens: tokens.peekable(),
+            error: None,
             allow_expr,
             found_expr: false,
             break_depth: 0,
@@ -132,6 +135,8 @@ where
     fn delcaration(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         if rule!(next_if_matches(self): token::Type::Var).is_some() {
             self.var_declaration()
+        } else if rule!(next_if_matches(self): token::Type::Fun).is_some() {
+            self.function("function")
         } else {
             self.statement()
         }
@@ -162,17 +167,19 @@ where
             self.while_statement()
         } else if rule!(next_if_matches(self): token::Type::For).is_some() {
             self.for_statement()
-        } else if let Some(token) = rule!(next_if_matches(self): token::Type::Break) {
-            self.break_statement(token)
+        } else if let Some(keyword) = rule!(next_if_matches(self): token::Type::Break) {
+            self.break_statement(keyword)
+        } else if let Some(keyword) = rule!(next_if_matches(self): token::Type::Return) {
+            self.return_statement(keyword)
         } else if rule!(next_if_matches(self): token::Type::Print).is_some() {
             self.print_statement()
         } else if rule!(next_if_matches(self): token::Type::LeftBrace).is_some() {
-            let (statements, error) = self.block();
+            let (block, error) = self.block();
 
             if let Some(error) = error {
                 Err(error)
             } else {
-                Ok(ast::stmt::Block { statements }.into())
+                Ok(block.into())
             }
         } else {
             self.expression_statement()
@@ -307,20 +314,39 @@ where
 
     fn break_statement(
         &mut self,
-        token: token::Token<'s>,
+        keyword: token::Token<'s>,
     ) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         rule!(statement_end(self): "`break`")?;
 
         if self.break_depth == 0 {
-            // NB This deviates from the book as this will **not** return the break statement and continue parsing
-            return Err(error_stack::report!(ParseError {
-                info: Some(token.info.into_owned()),
-                synchronize: false
-            })
-            .attach_printable("`break` can only be used in a loop"));
+            self.report(
+                error_stack::report!(ParseError {
+                    info: Some(keyword.info.clone().into_owned()),
+                })
+                .attach_printable("`break` can only be used in a loop"),
+            );
         }
 
-        Ok(ast::stmt::Break { info: token.info }.into())
+        Ok(ast::stmt::Break { info: keyword.info }.into())
+    }
+
+    fn return_statement(
+        &mut self,
+        keyword: token::Token<'s>,
+    ) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
+        let value = if rule!(!peek_matches(self): token::Type::Semicolon).unwrap_or(false) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+
+        rule!(statement_end(self): "return value")?;
+
+        Ok(ast::stmt::Return {
+            keyword: keyword.info,
+            value,
+        }
+        .into())
     }
 
     fn expression_statement(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
@@ -335,7 +361,71 @@ where
         Ok(ast::stmt::Expression { expression }.into())
     }
 
-    fn block(&mut self) -> (Vec<ast::Stmt<'s>>, Option<error_stack::Report<ParseError>>) {
+    fn function(&mut self, kind: &str) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
+        let info = rule!(
+            consume(self): token::Type::Identifier,
+            format!("expect {kind} name")
+        )?
+        .info;
+
+        rule!(
+            consume(self): token::Type::LeftParen,
+            format!("expect `(` after {kind} name")
+        )?;
+
+        let mut parameters = Vec::new();
+        if rule!(!peek_matches(self): token::Type::RightParen).unwrap_or(false) {
+            loop {
+                if parameters.len() >= 255 {
+                    let report = self
+                        .error()
+                        .attach_printable("cannot have more than 255 arguments");
+                    self.report(report)
+                }
+
+                parameters.push(
+                    rule!(
+                        consume(self): token::Type::Identifier,
+                        "expect parameter name"
+                    )?
+                    .info,
+                );
+
+                if rule!(next_if_matches(self): token::Type::Comma).is_none() {
+                    break;
+                }
+            }
+        }
+
+        rule!(
+            consume(self): token::Type::RightParen,
+            "expect `)` after parameters"
+        )?;
+
+        rule!(
+            consume(self): token::Type::LeftBrace,
+            format!("expect `{{` before {kind} body")
+        )?;
+
+        let (body, error) = self.block();
+        if let Some(error) = error {
+            return Err(error);
+        }
+
+        Ok(ast::stmt::Function {
+            info,
+            parameters,
+            body,
+        }
+        .into())
+    }
+
+    fn block(
+        &mut self,
+    ) -> (
+        ast::stmt::Block<'s>,
+        Option<error_stack::Report<ParseError>>,
+    ) {
         let mut statements = Vec::new();
         let mut error: Option<error_stack::Report<ParseError>> = None;
 
@@ -343,16 +433,10 @@ where
             let result = self.delcaration();
             match result {
                 Ok(stmt) => statements.push(stmt),
-                Err(report) => {
-                    if report.current_context().synchronize {
-                        self.synchronize()
-                    }
-
-                    match &mut error {
-                        Some(error) => error.extend_one(report),
-                        None => error = Some(report),
-                    }
-                }
+                Err(report) => match &mut error {
+                    Some(error) => error.extend_one(report),
+                    None => error = Some(report),
+                },
             }
         }
 
@@ -366,7 +450,7 @@ where
         })
         .unwrap();
 
-        (statements, error)
+        (ast::stmt::Block { statements }, error)
     }
 
     fn print_statement(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
@@ -396,25 +480,24 @@ where
                 .into());
             }
 
-            // NB This deviates from the book as this will **not** return the `l_value` and
-            // continue parsing the expression
-            return Err(error_stack::report!(ParseError {
-                info: Some(equals_info.into_owned()),
-                synchronize: false
-            })
-            .attach_printable("invalid assignment target"));
+            self.report(
+                error_stack::report!(ParseError {
+                    info: Some(equals_info.into_owned()),
+                })
+                .attach_printable("invalid assignment target"),
+            );
         }
 
         Ok(expr)
     }
 
-    rule!(binary(ast::expr::Logical): or => and, token::Type::Or);
-    rule!(binary(ast::expr::Logical): and => equality, token::Type::And);
-    rule!(binary(ast::expr::Binary): equality => comparision, token::Type::BangEqual | token::Type::EqualEqual);
-    rule!(binary(ast::expr::Binary): comparision => term,
+    rule!(infix(ast::expr::Logical): or => and, token::Type::Or);
+    rule!(infix(ast::expr::Logical): and => equality, token::Type::And);
+    rule!(infix(ast::expr::Binary): equality => comparision, token::Type::BangEqual | token::Type::EqualEqual);
+    rule!(infix(ast::expr::Binary): comparision => term,
         token::Type::Greater | token::Type::GreaterEqual | token::Type::Less | token::Type::LessEqual);
-    rule!(binary(ast::expr::Binary): term => factor, token::Type::Minus | token::Type::Plus);
-    rule!(binary(ast::expr::Binary): factor => unary, token::Type::Slash | token::Type::Star);
+    rule!(infix(ast::expr::Binary): term => factor, token::Type::Minus | token::Type::Plus);
+    rule!(infix(ast::expr::Binary): factor => unary, token::Type::Slash | token::Type::Star);
 
     fn unary(&mut self) -> error_stack::Result<ast::Expr<'s>, ParseError> {
         if let Some(operator) = rule!(next_if_matches(self): token::Type::Bang | token::Type::Minus)
@@ -425,8 +508,52 @@ where
             }
             .into())
         } else {
-            self.primary()
+            self.call()
         }
+    }
+
+    fn call(&mut self) -> error_stack::Result<ast::Expr<'s>, ParseError> {
+        let mut expr = self.primary()?;
+
+        loop {
+            if rule!(next_if_matches(self): token::Type::LeftParen).is_some() {
+                let callee = expr;
+                let mut arguments = Vec::new();
+
+                if rule!(!peek_matches(self): token::Type::RightParen).unwrap_or(false) {
+                    loop {
+                        if arguments.len() >= 255 {
+                            let report = self
+                                .error()
+                                .attach_printable("cannot have more than 255 arguments");
+                            self.report(report)
+                        }
+
+                        arguments.push(self.expression()?);
+
+                        if rule!(next_if_matches(self): token::Type::Comma).is_none() {
+                            break;
+                        }
+                    }
+                }
+
+                let right_paren = rule!(
+                    consume(self): token::Type::RightParen,
+                    "expect `)` after arguments"
+                )?;
+
+                expr = ast::expr::Call {
+                    callee,
+                    right_paren,
+                    arguments,
+                }
+                .into();
+            } else {
+                break;
+            }
+        }
+
+        Ok(expr)
     }
 
     fn primary(&mut self) -> error_stack::Result<ast::Expr<'s>, ParseError> {
@@ -458,14 +585,20 @@ where
             return Ok(ast::expr::Grouping { expression }.into());
         }
 
-        Err(self.error(true)).attach_printable("expect expression")
+        Err(self.error().attach_printable("expect expression"))
     }
 
-    fn error(&mut self, synchronize: bool) -> error_stack::Report<ParseError> {
+    fn error(&mut self) -> error_stack::Report<ParseError> {
         error_stack::report!(ParseError {
             info: self.tokens.next().map(|t| t.info.into_owned()),
-            synchronize
         })
+    }
+
+    fn report(&mut self, report: error_stack::Report<ParseError>) {
+        match self.error.as_mut() {
+            Some(r) => r.extend_one(report),
+            None => self.error = Some(report),
+        }
     }
 
     fn synchronize(&mut self) {
@@ -500,12 +633,9 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.tokens.peek().is_some() {
-            // TODO: use std once stable
-            #[allow(unstable_name_collisions)]
-            Some(self.delcaration().inspect_err(|r| {
-                if r.current_context().synchronize {
-                    self.synchronize();
-                }
+            Some(self.delcaration().map_err(|e| {
+                self.synchronize();
+                e
             }))
         } else {
             None
