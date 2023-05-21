@@ -26,6 +26,7 @@ impl error_stack::Context for SyntaxError {}
 
 pub fn scan(
     source: &str,
+    initial_line: usize,
 ) -> (
     Vec<token::Token<'_>>,
     Option<error_stack::Report<SyntaxError>>,
@@ -33,7 +34,7 @@ pub fn scan(
     let mut tokens = Vec::new();
     let mut error: Option<error_stack::Report<SyntaxError>> = None;
 
-    Scanner::new(source).for_each(|result| match result {
+    Scanner::new(source, initial_line).for_each(|result| match result {
         Ok(token) => tokens.push(token),
         Err(report) => match &mut error {
             Some(error) => error.extend_one(report),
@@ -59,11 +60,11 @@ struct Scanner<'s> {
 
 impl<'s> Scanner<'s> {
     /// Create a new `Scanner` from `source`
-    pub fn new(source: &'s str) -> Self {
+    pub fn new(source: &'s str, initial_line: usize) -> Self {
         Self {
             source,
             char_indices: itertools::peek_nth(source.char_indices()),
-            current_line: 1,
+            current_line: initial_line,
         }
     }
 
@@ -77,6 +78,7 @@ impl<'s> Scanner<'s> {
         let info = token::Info {
             lexeme: Cow::from(&self.source[token_start..=token_end]),
             line: self.current_line,
+            offset: token_start,
         };
 
         token::Token { typ, info }

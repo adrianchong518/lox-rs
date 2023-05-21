@@ -17,9 +17,9 @@ macro_rules! define_ast {
         pub mod $base_mod {
             use super::*;
 
-            pub trait Visitor {
+            pub trait Visitor<'s> {
                 type Output;
-                $( fn $visit_fn(self, v: &$typ<'_>) -> Self::Output; )*
+                $( fn $visit_fn(self, v: &$typ<'s>) -> Self::Output; )*
             }
 
             #[derive(Debug, Clone, PartialEq)]
@@ -28,7 +28,7 @@ macro_rules! define_ast {
             }
 
             impl<'s> $base<'s> {
-                pub fn accept<V: Visitor>(&self, visitor: V) -> V::Output {
+                pub fn accept<V: Visitor<'s>>(&self, visitor: V) -> V::Output {
                     match self {
                         $( Self::$typ(v) => v.accept(visitor), )*
                     }
@@ -52,7 +52,7 @@ macro_rules! define_ast {
                 }
 
                 impl<'s> $typ<'s> {
-                    pub fn accept<V: Visitor>(&self, visitor: V) -> V::Output {
+                    pub fn accept<V: Visitor<'s>>(&self, visitor: V) -> V::Output {
                         visitor.$visit_fn(self)
                     }
 
@@ -208,7 +208,7 @@ impl Printer {
     }
 }
 
-impl expr::Visitor for &mut Printer {
+impl expr::Visitor<'_> for &mut Printer {
     type Output = String;
 
     fn visit_assign(self, v: &expr::Assign<'_>) -> Self::Output {
@@ -279,7 +279,7 @@ impl expr::Visitor for &mut Printer {
     }
 }
 
-impl stmt::Visitor for &mut Printer {
+impl stmt::Visitor<'_> for &mut Printer {
     type Output = String;
 
     fn visit_block(self, v: &stmt::Block<'_>) -> Self::Output {
@@ -332,7 +332,11 @@ impl stmt::Visitor for &mut Printer {
                 v.condition.accept(self),
             )
         } else {
-            format!("(if {}\n{then_branch})", v.condition.accept(self))
+            format!(
+                "{}(if {}\n{then_branch})",
+                self.indent(),
+                v.condition.accept(self)
+            )
         }
     }
 

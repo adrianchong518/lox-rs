@@ -4,6 +4,7 @@ mod interpreter;
 mod into_owned;
 mod object;
 mod parser;
+mod resolver;
 mod scanner;
 mod token;
 
@@ -47,8 +48,7 @@ fn run_prompt() -> error_stack::Result<(), LoxError> {
     eprintln!("Running prompt...");
     let mut interpreter = interpreter::Interpreter::new();
 
-    let mut line = String::new();
-
+    let mut current_line = 0;
     loop {
         print!("> ");
         io::stdout()
@@ -57,17 +57,19 @@ fn run_prompt() -> error_stack::Result<(), LoxError> {
             .change_context(LoxError)
             .attach_printable("unable to flush stdout")?;
 
-        line.clear();
-        let result = match io::stdin()
+        let mut line = String::new();
+        if 0 == io::stdin()
             .read_line(&mut line)
             .into_report()
             .change_context(LoxError)
             .attach_printable("unable to read line from stdin")?
         {
-            0 => break,
-            _ => run(&mut interpreter, &line, true),
+            break;
         };
+        let line: &'static str = Box::leak(line.into_boxed_str());
+        current_line += 1;
 
+        let result = run(&mut interpreter, line, current_line, true);
         if let Err(report) = result {
             eprintln!("{report:?}");
         }
@@ -86,15 +88,16 @@ fn run_file(filepath: impl AsRef<path::Path>) -> error_stack::Result<(), LoxErro
         .change_context(LoxError)
         .attach_printable_lazy(|| format!("unable to read file {filepath:?}"))?;
 
-    run(&mut interpreter, &source, false)
+    run(&mut interpreter, &source, 1, false)
 }
 
-fn run(
-    interpreter: &mut interpreter::Interpreter,
-    source: &str,
+fn run<'s>(
+    interpreter: &mut interpreter::Interpreter<'s>,
+    source: &'s str,
+    initial_line: usize,
     allow_expr: bool,
 ) -> error_stack::Result<(), LoxError> {
-    let (tokens, syntax_error) = scanner::scan(source);
+    let (tokens, syntax_error) = scanner::scan(source, initial_line);
     for token in &tokens {
         eprintln!("{token:?}");
     }
@@ -116,6 +119,10 @@ fn run(
         (None, Some(p)) => return Err(p),
         (None, None) => {}
     }
+
+    resolver::Resolver::new(interpreter)
+        .resolve_many(&statements)
+        .change_context(LoxError)?;
 
     if found_expr {
         let Some(ast::Stmt::Expression(last)) = statements.pop() else {

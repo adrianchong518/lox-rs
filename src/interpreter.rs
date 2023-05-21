@@ -2,7 +2,7 @@ use std::fmt;
 
 use error_stack::ResultExt as _;
 
-use crate::env;
+use crate::{env, resolver};
 
 use crate::{
     ast,
@@ -34,10 +34,6 @@ macro_rules! binary_op {
 
         Ok((left $op right).into())
     }};
-}
-
-pub struct Interpreter {
-    environment: env::Environment,
 }
 
 #[derive(Debug)]
@@ -90,10 +86,17 @@ impl From<RuntimeErrorState> for error_stack::Report<RuntimeError> {
     }
 }
 
-impl Interpreter {
+#[derive(Debug)]
+pub struct Interpreter<'s> {
+    environment: env::Environment,
+    resolve_map: resolver::ResolveMap<'s>,
+}
+
+impl<'s> Interpreter<'s> {
     pub fn new() -> Self {
         Self {
             environment: env::Environment::new(),
+            resolve_map: resolver::ResolveMap::new(),
         }
     }
 
@@ -159,22 +162,40 @@ impl Interpreter {
     ) -> Result<object::Object, RuntimeErrorState> {
         expression.accept(self)
     }
+
+    pub fn resolve(&mut self, name: token::Info<'s>, distance: usize) {
+        self.resolve_map.insert(name, distance);
+    }
+
+    fn lookup_variable(&self, name: &token::Info<'_>) -> Option<object::Object> {
+        match self.resolve_map.get(name) {
+            Some(distance) => self.environment.get_at(&name.lexeme, *distance),
+            None => self.environment.get_global(&name.lexeme),
+        }
+    }
 }
 
-impl Default for Interpreter {
+impl<'s> Default for Interpreter<'s> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ast::expr::Visitor for &mut Interpreter {
+impl ast::expr::Visitor<'_> for &mut Interpreter<'_> {
     type Output = Result<object::Object, RuntimeErrorState>;
 
     fn visit_assign(self, v: &ast::expr::Assign<'_>) -> Self::Output {
         let value = self.evaluate(&v.value)?;
-        self.environment
-            .assign(&v.info.lexeme, value.clone())
-            .change_context(RuntimeError::new(v.info.clone().into_owned()))?;
+
+        match self.resolve_map.get(&v.info) {
+            Some(distance) => self
+                .environment
+                .assign_at(&v.info.lexeme, value.clone(), *distance),
+            None => self
+                .environment
+                .assign_global(&v.info.lexeme, value.clone()),
+        }
+        .change_context(RuntimeError::new(v.info.clone().into_owned()))?;
 
         Ok(value)
     }
@@ -305,7 +326,7 @@ impl ast::expr::Visitor for &mut Interpreter {
     }
 
     fn visit_variable(self, v: &ast::expr::Variable<'_>) -> Self::Output {
-        let value = self.environment.get(&v.info.lexeme).ok_or_else(|| {
+        let value = self.lookup_variable(&v.info).ok_or_else(|| {
             error_stack::report!(RuntimeError::new(v.info.clone().into_owned()))
                 .attach_printable(format!("undefined variable `{}`", v.info.lexeme))
         })?;
@@ -318,7 +339,7 @@ impl ast::expr::Visitor for &mut Interpreter {
     }
 }
 
-impl ast::stmt::Visitor for &mut Interpreter {
+impl ast::stmt::Visitor<'_> for &mut Interpreter<'_> {
     type Output = Result<(), RuntimeErrorState>;
 
     fn visit_block(self, v: &ast::stmt::Block<'_>) -> Self::Output {

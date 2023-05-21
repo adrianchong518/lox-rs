@@ -11,8 +11,8 @@ pub struct ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(token) = &self.info {
-            write!(f, "[line {} at {:?}] parse error", token.line, token.lexeme)
+        if let Some(info) = &self.info {
+            write!(f, "[line {} at {:?}] parse error", info.line, info.lexeme)
         } else {
             write!(f, "[at file end] parse error")
         }
@@ -185,13 +185,7 @@ where
         } else if rule!(next_if_matches(self): token::Type::Print).is_some() {
             self.print_statement()
         } else if rule!(next_if_matches(self): token::Type::LeftBrace).is_some() {
-            let (block, error) = self.block();
-
-            if let Some(error) = error {
-                Err(error)
-            } else {
-                Ok(block.into())
-            }
+            self.block().map(Into::into)
         } else {
             self.expression_statement()
         }
@@ -431,10 +425,7 @@ where
             format!("expect `{{` before {kind} body")
         )?;
 
-        let (body, error) = self.block();
-        if let Some(error) = error {
-            return Err(error);
-        }
+        let body = self.block()?;
 
         Ok(ast::expr::Function {
             keyword: keyword.info,
@@ -443,12 +434,7 @@ where
         })
     }
 
-    fn block(
-        &mut self,
-    ) -> (
-        ast::stmt::Block<'s>,
-        Option<error_stack::Report<ParseError>>,
-    ) {
+    fn block(&mut self) -> error_stack::Result<ast::stmt::Block<'s>, ParseError> {
         let mut statements = Vec::new();
         let mut error: Option<error_stack::Report<ParseError>> = None;
 
@@ -473,7 +459,11 @@ where
         })
         .unwrap();
 
-        (ast::stmt::Block { statements }, error)
+        if let Some(error) = error {
+            Err(error)
+        } else {
+            Ok(ast::stmt::Block { statements })
+        }
     }
 
     fn print_statement(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {

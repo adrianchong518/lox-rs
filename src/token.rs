@@ -2,10 +2,11 @@ use std::{borrow::Cow, fmt};
 
 use crate::into_owned::IntoOwned;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Info<'s> {
     pub lexeme: Cow<'s, str>,
     pub line: usize,
+    pub offset: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,7 +51,7 @@ impl IntoOwned for Info<'_> {
     fn into_owned(self) -> Self::Owned {
         Info {
             lexeme: Cow::from(self.lexeme.into_owned()),
-            line: self.line,
+            ..self
         }
     }
 }

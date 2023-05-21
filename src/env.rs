@@ -82,8 +82,7 @@ impl Default for Context {
 }
 
 /// Execution environment for interpreter
-///
-/// This differs from the book as a context / environment stack is used, instead of a parent-pointer tree
+#[derive(Debug)]
 pub struct Environment {
     global: ContextRef,
     context: Option<ContextRef>,
@@ -131,6 +130,15 @@ impl Environment {
         self.context.as_ref().unwrap_or(&self.global)
     }
 
+    fn ancestor(&self, distance: usize) -> Option<ContextRef> {
+        let mut ancestor = self.context.as_ref()?.clone();
+        for _ in 0..distance {
+            let next = ancestor.borrow().parent.as_ref()?.clone();
+            ancestor = next;
+        }
+        Some(ancestor)
+    }
+
     pub fn define(&mut self, name: String, value: object::Object) {
         self.current_context().borrow_mut().define(name, value)
     }
@@ -143,7 +151,35 @@ impl Environment {
         self.current_context().borrow_mut().assign(name, value)
     }
 
+    pub fn assign_at(
+        &mut self,
+        name: &str,
+        value: object::Object,
+        distance: usize,
+    ) -> error_stack::Result<(), EnvironmentError> {
+        self.ancestor(distance)
+            .expect("resolved distance is valid")
+            .borrow_mut()
+            .assign(name, value)
+    }
+
+    pub fn assign_global(
+        &mut self,
+        name: &str,
+        value: object::Object,
+    ) -> error_stack::Result<(), EnvironmentError> {
+        self.global.borrow_mut().assign(name, value)
+    }
+
     pub fn get(&self, name: &str) -> Option<object::Object> {
         self.current_context().borrow().get(name)
+    }
+
+    pub fn get_global(&self, name: &str) -> Option<object::Object> {
+        self.global.borrow().get(name)
+    }
+
+    pub fn get_at(&self, name: &str, distance: usize) -> Option<object::Object> {
+        self.ancestor(distance)?.borrow().get(name)
     }
 }
