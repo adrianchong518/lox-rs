@@ -163,13 +163,13 @@ impl<'s> Interpreter<'s> {
         expression.accept(self)
     }
 
-    pub fn resolve(&mut self, name: token::Info<'s>, distance: usize) {
-        self.resolve_map.insert(name, distance);
+    pub fn resolve(&mut self, name: token::Info<'s>, location: resolver::VariableLocation) {
+        self.resolve_map.insert(name, location);
     }
 
     fn lookup_variable(&self, name: &token::Info<'_>) -> Option<object::Object> {
         match self.resolve_map.get(name) {
-            Some(distance) => self.environment.get_at(&name.lexeme, *distance),
+            Some(location) => self.environment.get_at(location),
             None => self.environment.get_global(&name.lexeme),
         }
     }
@@ -188,9 +188,7 @@ impl ast::expr::Visitor<'_> for &mut Interpreter<'_> {
         let value = self.evaluate(&v.value)?;
 
         match self.resolve_map.get(&v.info) {
-            Some(distance) => self
-                .environment
-                .assign_at(&v.info.lexeme, value.clone(), *distance),
+            Some(location) => self.environment.assign_at(location, value.clone()),
             None => self
                 .environment
                 .assign_global(&v.info.lexeme, value.clone()),
@@ -335,7 +333,7 @@ impl ast::expr::Visitor<'_> for &mut Interpreter<'_> {
     }
 
     fn visit_function(self, v: &ast::expr::Function<'_>) -> Self::Output {
-        Ok(object::Function::new(v, self.environment.current_context().clone()).into())
+        Ok(object::Function::new(v, self.environment.context().cloned()).into())
     }
 }
 
@@ -356,10 +354,9 @@ impl ast::stmt::Visitor<'_> for &mut Interpreter<'_> {
     }
 
     fn visit_function(self, v: &ast::stmt::Function<'_>) -> Self::Output {
-        let function =
-            object::Function::new(&v.function, self.environment.current_context().clone())
-                .attach_name(v.name.clone().into_owned())
-                .into();
+        let function = object::Function::new(&v.function, self.environment.context().cloned())
+            .attach_name(v.name.clone().into_owned())
+            .into();
 
         self.environment
             .define(v.name.lexeme.clone().into_owned(), function);

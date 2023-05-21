@@ -19,12 +19,13 @@ impl fmt::Display for ResolutionError {
 
 impl error_stack::Context for ResolutionError {}
 
-pub type ResolveMap<'s> = HashMap<token::Info<'s>, usize>;
+pub type ResolveMap<'s> = HashMap<token::Info<'s>, VariableLocation>;
 
 #[derive(Debug)]
-pub struct Variable<'s> {
+struct Variable<'s> {
     name: token::Info<'s>,
     state: VariableState,
+    slot: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -32,6 +33,12 @@ enum VariableState {
     Declared,
     Defined,
     Read,
+}
+
+#[derive(Debug)]
+pub struct VariableLocation {
+    pub distance: usize,
+    pub slot: usize,
 }
 
 #[derive(Debug)]
@@ -154,11 +161,18 @@ impl<'s, 'a> Resolver<'s, 'a> {
             .enumerate()
             .find(|(_, scope)| scope.contains_key(&name.lexeme))
         {
+            let var = scope.get_mut(&name.lexeme).unwrap();
             if is_read {
-                scope.get_mut(&name.lexeme).unwrap().state = VariableState::Read;
+                var.state = VariableState::Read;
             }
 
-            self.interpreter.resolve(name, distance);
+            self.interpreter.resolve(
+                name,
+                VariableLocation {
+                    distance,
+                    slot: var.slot,
+                },
+            );
         }
     }
 
@@ -189,6 +203,7 @@ impl<'s, 'a> Resolver<'s, 'a> {
                 Variable {
                     name: name.clone(),
                     state: VariableState::Declared,
+                    slot: scope.len(),
                 },
             );
         }
@@ -197,15 +212,10 @@ impl<'s, 'a> Resolver<'s, 'a> {
     }
 
     fn define(&mut self, name: &token::Info<'s>) {
-        self.scopes.last_mut().and_then(|scope| {
-            scope.insert(
-                name.lexeme.clone(),
-                Variable {
-                    name: name.clone(),
-                    state: VariableState::Defined,
-                },
-            )
-        });
+        let Some(scope) = self.scopes.last_mut() else { return };
+        if let Some(v) = scope.get_mut(&name.lexeme) {
+            v.state = VariableState::Defined;
+        }
     }
 }
 

@@ -6,11 +6,11 @@ use crate::{ast, env, interpreter, object::callable, token};
 pub struct Function {
     name: Option<token::Info<'static>>,
     declaration: ast::expr::Function<'static>,
-    closure: env::ContextRef,
+    closure: Option<env::ContextRef>,
 }
 
 impl Function {
-    pub fn new(decl: &ast::expr::Function<'_>, closure: env::ContextRef) -> Self {
+    pub fn new(decl: &ast::expr::Function<'_>, closure: Option<env::ContextRef>) -> Self {
         Self {
             name: None,
             declaration: decl.clone().into_owned(),
@@ -37,10 +37,10 @@ impl super::callable::Callable for Function {
         arguments: Vec<super::Object>,
         _info: &crate::token::Info<'_>,
     ) -> Result<super::Object, interpreter::RuntimeErrorState> {
-        let mut context = env::Context::new_with_parent(Some(self.closure.clone()));
+        let mut context = env::Context::new_with_parent(self.closure.clone());
 
-        for (param, arg) in self.declaration.parameters.iter().zip(arguments) {
-            context.define(param.clone().lexeme.into_owned(), arg);
+        for arg in arguments {
+            context.define(arg);
         }
 
         match interpreter.execute_block_swap_context(&self.declaration.body, context.info_ref()) {
