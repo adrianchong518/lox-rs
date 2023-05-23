@@ -18,17 +18,17 @@ impl error_stack::Context for ClockFnError {}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClockFn;
 
-impl super::callable::Callable for ClockFn {
+impl<'s> super::callable::Callable<'s> for ClockFn {
     fn arity(&self) -> usize {
         0
     }
 
     fn call(
         &self,
-        _interpreter: &mut interpreter::Interpreter,
-        _arguments: Vec<super::Object>,
-        info: &token::Info<'_>,
-    ) -> Result<super::Object, interpreter::RuntimeErrorState> {
+        _interpreter: &mut interpreter::Interpreter<'s>,
+        _arguments: Vec<super::Object<'s>>,
+        info: &token::Info<'s>,
+    ) -> Result<super::Object<'s>, interpreter::RuntimeErrorState<'s>> {
         Ok(time::SystemTime::now()
             .duration_since(time::UNIX_EPOCH)
             .into_report()
@@ -46,7 +46,7 @@ impl fmt::Display for ClockFn {
     }
 }
 
-impl From<ClockFn> for callable::CallableObject {
+impl From<ClockFn> for callable::CallableObject<'_> {
     fn from(value: ClockFn) -> Self {
         Self::ClockFn(value)
     }

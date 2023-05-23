@@ -104,7 +104,7 @@ fn run<'s>(
 
     let (found_expr, mut statements, parse_error) = parser::parse(tokens, allow_expr);
     for statement in &statements {
-        eprintln!("{statement}")
+        eprintln!("{statement}");
     }
 
     match (

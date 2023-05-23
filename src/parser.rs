@@ -146,11 +146,52 @@ where
         if rule!(peek_matches(self): token::Type::Fun).unwrap_or(false)
             && rule!(peek_nth_matches(self, 1): token::Type::Identifier).unwrap_or(false)
         {
-            let keyword = self.tokens.next().unwrap();
-            return self.function(keyword, "function");
+            _ = self.tokens.next();
+            return self.function("function").map(Into::into);
+        }
+
+        if rule!(next_if_matches(self): token::Type::Class).is_some() {
+            return self.class_declaration();
         }
 
         self.statement()
+    }
+
+    fn class_declaration(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
+        let name = rule!(consume(self): token::Type::Identifier, "expect class name")?.info;
+
+        rule!(
+            consume(self): token::Type::LeftBrace,
+            "expect `{` before class body"
+        )?;
+
+        let mut error: Option<error_stack::Report<ParseError>> = None;
+        let mut methods = Vec::new();
+        while rule!(!peek_matches(self): token::Type::RightBrace).unwrap_or(false) {
+            match self.function("method") {
+                Ok(func) => methods.push(func),
+                Err(report) => match &mut error {
+                    Some(error) => error.extend_one(report),
+                    None => error = Some(report),
+                },
+            }
+        }
+
+        rule!(
+            consume(self): token::Type::RightBrace,
+            "expect `}` after class body"
+        )
+        .map_err(|report| match &mut error {
+            Some(error) => error.extend_one(report),
+            None => error = Some(report),
+        })
+        .unwrap();
+
+        if let Some(error) = error {
+            Err(error)
+        } else {
+            Ok(ast::stmt::Class { name, methods }.into())
+        }
     }
 
     fn var_declaration(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
@@ -363,11 +404,7 @@ where
         Ok(ast::stmt::Expression { expression }.into())
     }
 
-    fn function(
-        &mut self,
-        keyword: token::Token<'s>,
-        kind: &str,
-    ) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
+    fn function(&mut self, kind: &str) -> error_stack::Result<ast::stmt::Function<'s>, ParseError> {
         let name = rule!(
             consume(self): token::Type::Identifier,
             format!("expect {kind} name")
@@ -376,14 +413,12 @@ where
 
         Ok(ast::stmt::Function {
             name,
-            function: self.function_body(keyword, kind)?,
-        }
-        .into())
+            function: self.function_body(kind)?,
+        })
     }
 
     fn function_body(
         &mut self,
-        keyword: token::Token<'s>,
         kind: &str,
     ) -> error_stack::Result<ast::expr::Function<'s>, ParseError> {
         rule!(
@@ -398,7 +433,7 @@ where
                     let report = self
                         .error()
                         .attach_printable("cannot have more than 255 arguments");
-                    self.report(report)
+                    self.report(report);
                 }
 
                 parameters.push(
@@ -427,11 +462,7 @@ where
 
         let body = self.block()?;
 
-        Ok(ast::expr::Function {
-            keyword: keyword.info,
-            parameters,
-            body,
-        })
+        Ok(ast::expr::Function { parameters, body })
     }
 
     fn block(&mut self) -> error_stack::Result<ast::stmt::Block<'s>, ParseError> {
@@ -493,6 +524,10 @@ where
                 .into());
             }
 
+            if let ast::Expr::Get(get) = expr {
+                return Ok(ast::expr::Set { field: *get, value }.into());
+            }
+
             self.report(
                 error_stack::report!(ParseError {
                     info: Some(equals_info.into_owned()),
@@ -530,35 +565,17 @@ where
 
         loop {
             if rule!(next_if_matches(self): token::Type::LeftParen).is_some() {
-                let callee = expr;
-                let mut arguments = Vec::new();
-
-                if rule!(!peek_matches(self): token::Type::RightParen).unwrap_or(false) {
-                    loop {
-                        if arguments.len() >= 255 {
-                            let report = self
-                                .error()
-                                .attach_printable("cannot have more than 255 arguments");
-                            self.report(report)
-                        }
-
-                        arguments.push(self.expression()?);
-
-                        if rule!(next_if_matches(self): token::Type::Comma).is_none() {
-                            break;
-                        }
-                    }
-                }
-
-                let right_paren = rule!(
-                    consume(self): token::Type::RightParen,
-                    "expect `)` after arguments"
-                )?;
-
-                expr = ast::expr::Call {
-                    callee,
-                    right_paren,
-                    arguments,
+                expr = self.finish_call(expr)?.into();
+            } else if let Some(dot) = rule!(next_if_matches(self): token::Type::Dot) {
+                let name = rule!(
+                    consume(self): token::Type::Identifier,
+                    "expect property name after `.`"
+                )?
+                .info;
+                expr = ast::expr::Get {
+                    object: expr,
+                    dot: dot.info,
+                    name,
                 }
                 .into();
             } else {
@@ -567,6 +584,40 @@ where
         }
 
         Ok(expr)
+    }
+
+    fn finish_call(
+        &mut self,
+        callee: ast::Expr<'s>,
+    ) -> error_stack::Result<ast::expr::Call<'s>, ParseError> {
+        let mut arguments = Vec::new();
+        if rule!(!peek_matches(self): token::Type::RightParen).unwrap_or(false) {
+            loop {
+                if arguments.len() >= 255 {
+                    let report = self
+                        .error()
+                        .attach_printable("cannot have more than 255 arguments");
+                    self.report(report);
+                }
+
+                arguments.push(self.expression()?);
+
+                if rule!(next_if_matches(self): token::Type::Comma).is_none() {
+                    break;
+                }
+            }
+        }
+
+        let right_paren = rule!(
+            consume(self): token::Type::RightParen,
+            "expect `)` after arguments"
+        )?;
+
+        Ok(ast::expr::Call {
+            callee,
+            right_paren,
+            arguments,
+        })
     }
 
     fn primary(&mut self) -> error_stack::Result<ast::Expr<'s>, ParseError> {
@@ -579,6 +630,12 @@ where
                 literal: token::Literal { typ, info },
             }
             .into());
+        }
+
+        if let Some(token::Token { info: keyword, .. }) =
+            rule!(next_if_matches(self): token::Type::This)
+        {
+            return Ok(ast::expr::This { keyword }.into());
         }
 
         if let Some(token::Token { info, .. }) =
@@ -598,8 +655,8 @@ where
             return Ok(ast::expr::Grouping { expression }.into());
         }
 
-        if let Some(keyword) = rule!(next_if_matches(self): token::Type::Fun) {
-            return Ok(self.function_body(keyword, "function")?.into());
+        if rule!(next_if_matches(self): token::Type::Fun).is_some() {
+            return Ok(self.function_body("function")?.into());
         }
 
         Err(self.error().attach_printable("expect expression"))

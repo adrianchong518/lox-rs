@@ -23,7 +23,7 @@ pub type ResolveMap<'s> = HashMap<token::Info<'s>, VariableLocation>;
 
 #[derive(Debug)]
 struct Variable<'s> {
-    name: token::Info<'s>,
+    name: Option<token::Info<'s>>,
     state: VariableState,
     slot: usize,
 }
@@ -41,16 +41,25 @@ pub struct VariableLocation {
     pub slot: usize,
 }
 
+type Scope<'s> = HashMap<Cow<'s, str>, Variable<'s>>;
+
 #[derive(Debug)]
 pub struct Resolver<'s, 'a> {
     interpreter: &'a mut interpreter::Interpreter<'s>,
-    scopes: Vec<HashMap<Cow<'s, str>, Variable<'s>>>,
+    scopes: Vec<Scope<'s>>,
     current_function: Option<FunctionType>,
+    current_class: Option<ClassType>,
 }
 
 #[derive(Debug)]
 enum FunctionType {
     Function,
+    Method,
+}
+
+#[derive(Debug)]
+enum ClassType {
+    Class,
 }
 
 impl<'s, 'a> Resolver<'s, 'a> {
@@ -59,11 +68,15 @@ impl<'s, 'a> Resolver<'s, 'a> {
             interpreter,
             scopes: Vec::new(),
             current_function: None,
+            current_class: None,
         }
     }
 
-    fn begin_scope(&mut self) {
+    fn begin_scope(&mut self) -> &mut HashMap<Cow<'s, str>, Variable<'s>> {
         self.scopes.push(HashMap::new());
+        self.scopes
+            .last_mut()
+            .expect("a new scope must have been created")
     }
 
     fn end_scope(&mut self) -> error_stack::Result<(), ResolutionError> {
@@ -73,10 +86,13 @@ impl<'s, 'a> Resolver<'s, 'a> {
 
         let mut error: Option<error_stack::Report<ResolutionError>> = None;
 
-        for var in scope.into_values() {
-            if var.state == VariableState::Defined {
+        for (state, name) in scope
+            .into_values()
+            .filter_map(|v| v.name.map(|n| (v.state, n)))
+        {
+            if state == VariableState::Defined {
                 let report = error_stack::report!(ResolutionError {
-                    info: var.name.into_owned()
+                    info: name.into_owned()
                 })
                 .attach_printable("local variable is not used");
 
@@ -99,10 +115,10 @@ impl<'s, 'a> Resolver<'s, 'a> {
         f: impl FnOnce(&mut Self) -> error_stack::Result<(), ResolutionError>,
     ) -> error_stack::Result<(), ResolutionError> {
         self.begin_scope();
-        f(self)?;
+        let result = f(self);
         self.end_scope()?;
 
-        Ok(())
+        result
     }
 
     fn with_function_scope(
@@ -111,10 +127,21 @@ impl<'s, 'a> Resolver<'s, 'a> {
         f: impl FnOnce(&mut Self) -> error_stack::Result<(), ResolutionError>,
     ) -> error_stack::Result<(), ResolutionError> {
         let enclosing = self.current_function.replace(typ);
-        self.with_scope(f)?;
+        let result = self.with_scope(f);
         self.current_function = enclosing;
+        result
+    }
 
-        Ok(())
+    fn with_class_scope(
+        &mut self,
+        typ: ClassType,
+        f: impl FnOnce(&mut Self) -> error_stack::Result<(), ResolutionError>,
+    ) -> error_stack::Result<(), ResolutionError> {
+        let enclosing = self.current_class.replace(typ);
+        let result = self.with_scope(f);
+        self.current_class = enclosing;
+
+        result
     }
 
     fn resolve_expr(
@@ -183,14 +210,17 @@ impl<'s, 'a> Resolver<'s, 'a> {
     ) -> error_stack::Result<(), ResolutionError> {
         self.with_function_scope(typ, |s| {
             for param in &function.parameters {
-                s.declare(param)?;
-                s.define(param);
+                s.declare(param, VariableState::Defined)?;
             }
             s.resolve_many(&function.body.statements)
         })
     }
 
-    fn declare(&mut self, name: &token::Info<'s>) -> error_stack::Result<(), ResolutionError> {
+    fn declare(
+        &mut self,
+        name: &token::Info<'s>,
+        state: VariableState,
+    ) -> error_stack::Result<(), ResolutionError> {
         if let Some(scope) = self.scopes.last_mut() {
             if scope.contains_key(&name.lexeme) {
                 return Err(error_stack::report!(ResolutionError {
@@ -201,8 +231,8 @@ impl<'s, 'a> Resolver<'s, 'a> {
             scope.insert(
                 name.lexeme.clone(),
                 Variable {
-                    name: name.clone(),
-                    state: VariableState::Declared,
+                    name: Some(name.clone()),
+                    state,
                     slot: scope.len(),
                 },
             );
@@ -244,6 +274,16 @@ impl<'s> ast::expr::Visitor<'s> for &mut Resolver<'s, '_> {
         Ok(())
     }
 
+    fn visit_get(self, v: &ast::expr::Get<'s>) -> Self::Output {
+        self.resolve_expr(&v.object)
+    }
+
+    fn visit_set(self, v: &ast::expr::Set<'s>) -> Self::Output {
+        v.field.accept(&mut *self)?;
+        self.resolve_expr(&v.value)?;
+        Ok(())
+    }
+
     fn visit_grouping(self, v: &ast::expr::Grouping<'s>) -> Self::Output {
         self.resolve_expr(&v.expression)
     }
@@ -258,6 +298,18 @@ impl<'s> ast::expr::Visitor<'s> for &mut Resolver<'s, '_> {
         Ok(())
     }
 
+    fn visit_this(self, v: &ast::expr::This<'s>) -> Self::Output {
+        if self.current_class.is_none() {
+            return Err(error_stack::report!(ResolutionError {
+                info: v.keyword.clone().into_owned()
+            })
+            .attach_printable("cannot use `this` outside of a class"));
+        }
+
+        self.resolve_local(v.keyword.clone(), true);
+        Ok(())
+    }
+
     fn visit_unary(self, v: &ast::expr::Unary<'s>) -> Self::Output {
         self.resolve_expr(&v.right)
     }
@@ -267,8 +319,7 @@ impl<'s> ast::expr::Visitor<'s> for &mut Resolver<'s, '_> {
             .scopes
             .last()
             .and_then(|scope| scope.get(&v.info.lexeme))
-            .map(|v| v.state == VariableState::Declared)
-            .unwrap_or(false)
+            .map_or(false, |v| v.state == VariableState::Declared)
         {
             return Err(error_stack::report!(ResolutionError {
                 info: v.info.clone().into_owned()
@@ -296,14 +347,36 @@ impl<'s> ast::stmt::Visitor<'s> for &mut Resolver<'s, '_> {
         Ok(())
     }
 
+    fn visit_class(self, v: &ast::stmt::Class<'s>) -> Self::Output {
+        self.declare(&v.name, VariableState::Defined)?;
+        self.with_class_scope(ClassType::Class, |s| {
+            s.scopes
+                .last_mut()
+                .expect("a new scope is created by `with_scope`")
+                .insert(
+                    "this".into(),
+                    Variable {
+                        name: None,
+                        state: VariableState::Read,
+                        slot: 0,
+                    },
+                );
+
+            for method in &v.methods {
+                s.declare(&method.name, VariableState::Read)?;
+                s.resolve_function(&method.function, FunctionType::Method)?;
+            }
+
+            Ok(())
+        })
+    }
+
     fn visit_expr(self, v: &ast::stmt::Expression<'s>) -> Self::Output {
         self.resolve_expr(&v.expression)
     }
 
     fn visit_function(self, v: &ast::stmt::Function<'s>) -> Self::Output {
-        self.declare(&v.name)?;
-        self.define(&v.name);
-
+        self.declare(&v.name, VariableState::Defined)?;
         v.function.accept(self)
     }
 
@@ -337,7 +410,7 @@ impl<'s> ast::stmt::Visitor<'s> for &mut Resolver<'s, '_> {
     }
 
     fn visit_var(self, v: &ast::stmt::Var<'s>) -> Self::Output {
-        self.declare(&v.info)?;
+        self.declare(&v.info, VariableState::Declared)?;
 
         if let Some(initializer) = &v.initializer {
             self.resolve_expr(initializer)?;

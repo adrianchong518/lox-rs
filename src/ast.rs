@@ -102,6 +102,17 @@ define_ast! {
             arguments: Vec<Expr<'s>>,
         },
 
+        Get<'s> [visit_get] {
+            object: Expr<'s>,
+            dot: token::Info<'s>,
+            name: token::Info<'s>,
+        },
+
+        Set<'s> [visit_set] {
+            field: Get<'s>,
+            value: Expr<'s>,
+        },
+
         Grouping<'s> [visit_grouping] {
             expression: Expr<'s>,
         },
@@ -116,6 +127,10 @@ define_ast! {
             right: Expr<'s>,
         },
 
+        This<'s> [visit_this] {
+            keyword: token::Info<'s>,
+        },
+
         Unary<'s> [visit_unary] {
             operator: token::Token<'s>,
             right: Expr<'s>,
@@ -126,7 +141,6 @@ define_ast! {
         },
 
         Function<'s> [visit_function] {
-            keyword: token::Info<'s>,
             parameters: Vec<token::Info<'s>>,
             body: stmt::Block<'s>,
         },
@@ -147,6 +161,11 @@ define_ast! {
 
         Break<'s> [visit_break] {
             info: token::Info<'s>,
+        },
+
+        Class<'s> [visit_class] {
+            name: token::Info<'s>,
+            methods: Vec<Function<'s>>,
         },
 
         Expression<'s> [visit_expr] {
@@ -203,7 +222,7 @@ struct Printer {
 }
 
 impl Printer {
-    fn indent(&self) -> String {
+    fn indent(self) -> String {
         " ".repeat(self.indentation)
     }
 }
@@ -231,9 +250,21 @@ impl expr::Visitor<'_> for &mut Printer {
             .arguments
             .iter()
             .map(|expr| format!(" {}", expr.accept(&mut *self)))
-            .fold(String::new(), |acc, x| format!("{acc}{x}"));
+            .join("");
 
-        format!("({}{arguments})", v.callee.accept(self))
+        format!("(call '{}{arguments})", v.callee.accept(self))
+    }
+
+    fn visit_get(self, v: &expr::Get<'_>) -> Self::Output {
+        format!("(get '{} {})", v.name.lexeme, v.object.accept(self))
+    }
+
+    fn visit_set(self, v: &expr::Set<'_>) -> Self::Output {
+        format!(
+            "(set! {} {})",
+            v.field.accept(&mut *self),
+            v.value.accept(&mut *self)
+        )
     }
 
     fn visit_grouping(self, v: &expr::Grouping<'_>) -> Self::Output {
@@ -253,6 +284,10 @@ impl expr::Visitor<'_> for &mut Printer {
         )
     }
 
+    fn visit_this(self, _v: &expr::This<'_>) -> Self::Output {
+        "this".to_string()
+    }
+
     fn visit_unary(self, v: &expr::Unary<'_>) -> Self::Output {
         format!("({} {})", v.operator.info.lexeme, v.right.accept(self))
     }
@@ -264,12 +299,7 @@ impl expr::Visitor<'_> for &mut Printer {
     fn visit_function(self, v: &expr::Function<'_>) -> Self::Output {
         // TODO: change to std once stable
         #[allow(unstable_name_collisions)]
-        let parameters = v
-            .parameters
-            .iter()
-            .map(|info| &*info.lexeme)
-            .intersperse(" ")
-            .fold(String::new(), |acc, x| format!("{acc}{x}"));
+        let parameters = v.parameters.iter().map(|info| &*info.lexeme).join(" ");
 
         self.indentation += 2;
         let body = v.body.accept(&mut *self);
@@ -291,8 +321,7 @@ impl stmt::Visitor<'_> for &mut Printer {
             .statements
             .iter()
             .map(|stmt| stmt.accept(&mut *self))
-            .intersperse("\n".to_string())
-            .fold(String::new(), |acc, x| format!("{acc}{x}"));
+            .join("\n");
 
         self.indentation -= 2;
 
@@ -301,6 +330,21 @@ impl stmt::Visitor<'_> for &mut Printer {
 
     fn visit_break(self, _: &stmt::Break<'_>) -> Self::Output {
         format!("{}(break)", self.indent())
+    }
+
+    fn visit_class(self, v: &stmt::Class<'_>) -> Self::Output {
+        self.indentation += 4;
+        let methods = v.methods.iter().map(|f| f.accept(&mut *self)).join("\n");
+        self.indentation -= 4;
+
+        format!(
+            "\
+{indent}(define {}
+{indent}  (class
+{indent}{methods}))",
+            v.name.lexeme,
+            indent = self.indent()
+        )
     }
 
     fn visit_expr(self, v: &stmt::Expression<'_>) -> Self::Output {
@@ -313,9 +357,11 @@ impl stmt::Visitor<'_> for &mut Printer {
         self.indentation -= 2;
 
         format!(
-            "{}(define {}\n{0}  {function})",
-            self.indent(),
-            v.name.lexeme
+            "\
+{indent}(define {}
+{indent}  {function})",
+            v.name.lexeme,
+            indent = self.indent(),
         )
     }
 

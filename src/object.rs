@@ -1,24 +1,31 @@
 pub mod callable;
+pub mod class;
 pub mod clock_fn;
 pub mod function;
+pub mod instance;
 
+pub use class::Class;
+pub use class::ClassHandle;
 pub use clock_fn::ClockFn;
 pub use function::Function;
+pub use instance::Instance;
+pub use instance::InstanceHandle;
 
 use std::fmt;
 
 use crate::token;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Object {
+pub enum Object<'s> {
     Number(f64),
     String(String),
     Bool(bool),
-    Callable(callable::CallableObject),
+    Callable(callable::CallableObject<'s>),
+    Instance(InstanceHandle<'s>),
     Nil,
 }
 
-impl Object {
+impl Object<'_> {
     pub fn is_truthy(&self) -> bool {
         match self {
             Self::Bool(bool) => *bool,
@@ -28,7 +35,7 @@ impl Object {
     }
 }
 
-impl fmt::Display for Object {
+impl fmt::Display for Object<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             match self {
@@ -36,6 +43,7 @@ impl fmt::Display for Object {
                 Self::String(_) => write!(f, "string"),
                 Self::Bool(_) => write!(f, "boolean"),
                 Self::Callable(c) => write!(f, "{c:#}"),
+                Self::Instance(i) => write!(f, "{i:#}"),
                 Self::Nil => write!(f, "nil"),
             }
         } else {
@@ -44,13 +52,14 @@ impl fmt::Display for Object {
                 Self::String(s) => write!(f, "{s}"),
                 Self::Bool(b) => write!(f, "{b}"),
                 Self::Callable(c) => write!(f, "{c}"),
+                Self::Instance(i) => write!(f, "{i}"),
                 Self::Nil => write!(f, "nil"),
             }
         }
     }
 }
 
-impl From<token::LiteralType> for Object {
+impl From<token::LiteralType> for Object<'_> {
     fn from(value: token::LiteralType) -> Self {
         match value {
             token::LiteralType::Number(n) => Self::Number(n),
@@ -62,27 +71,27 @@ impl From<token::LiteralType> for Object {
     }
 }
 
-impl From<f64> for Object {
+impl From<f64> for Object<'_> {
     fn from(value: f64) -> Self {
         Self::Number(value)
     }
 }
 
-impl From<String> for Object {
+impl From<String> for Object<'_> {
     fn from(value: String) -> Self {
         Self::String(value)
     }
 }
 
-impl From<bool> for Object {
+impl From<bool> for Object<'_> {
     fn from(value: bool) -> Self {
         Self::Bool(value)
     }
 }
 
-impl<T> From<T> for Object
+impl<'s, T> From<T> for Object<'s>
 where
-    T: Into<callable::CallableObject>,
+    T: Into<callable::CallableObject<'s>>,
 {
     fn from(value: T) -> Self {
         Self::Callable(value.into())
