@@ -290,11 +290,19 @@ impl<'s> ast::expr::Visitor<'s> for &mut Interpreter<'s> {
             );
         };
 
-        instance.get(&v.name.lexeme).ok_or_else(|| {
-            error_stack::report!(RuntimeError::new(v.name.clone().into_owned()))
+        let Some(object) = instance .get(&v.name.lexeme) else {
+            return Err(error_stack::report!(RuntimeError::new(v.name.clone().into_owned()))
                 .attach_printable(format!("undefined property `{}`", v.name.lexeme))
-                .into()
-        })
+                .into());
+        };
+
+        if let object::Object::Callable(object::CallableObject::Function(func)) = &object {
+            if func.is_getter() {
+                return func.call(self, Vec::new(), &v.name);
+            }
+        }
+
+        Ok(object)
     }
 
     fn visit_set(self, v: &ast::expr::Set<'s>) -> Self::Output {

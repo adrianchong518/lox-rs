@@ -421,39 +421,47 @@ where
         &mut self,
         kind: &str,
     ) -> error_stack::Result<ast::expr::Function<'s>, ParseError> {
-        rule!(
-            consume(self): token::Type::LeftParen,
-            format!("expect `(` after {kind} name")
-        )?;
+        let parameters = if kind == "method"
+            && rule!(!peek_matches(self): token::Type::LeftParen).unwrap_or(false)
+        {
+            None
+        } else {
+            rule!(
+                consume(self): token::Type::LeftParen,
+                format!("expect `(` after {kind} name")
+            )?;
 
-        let mut parameters = Vec::new();
-        if rule!(!peek_matches(self): token::Type::RightParen).unwrap_or(false) {
-            loop {
-                if parameters.len() >= 255 {
-                    let report = self
-                        .error()
-                        .attach_printable("cannot have more than 255 arguments");
-                    self.report(report);
-                }
+            let mut parameters = Vec::new();
+            if rule!(!peek_matches(self): token::Type::RightParen).unwrap_or(false) {
+                loop {
+                    if parameters.len() >= 255 {
+                        let report = self
+                            .error()
+                            .attach_printable("cannot have more than 255 arguments");
+                        self.report(report);
+                    }
 
-                parameters.push(
-                    rule!(
-                        consume(self): token::Type::Identifier,
-                        "expect parameter name"
-                    )?
-                    .info,
-                );
+                    parameters.push(
+                        rule!(
+                            consume(self): token::Type::Identifier,
+                            "expect parameter name"
+                        )?
+                        .info,
+                    );
 
-                if rule!(next_if_matches(self): token::Type::Comma).is_none() {
-                    break;
+                    if rule!(next_if_matches(self): token::Type::Comma).is_none() {
+                        break;
+                    }
                 }
             }
-        }
 
-        rule!(
-            consume(self): token::Type::RightParen,
-            "expect `)` after parameters"
-        )?;
+            rule!(
+                consume(self): token::Type::RightParen,
+                "expect `)` after parameters"
+            )?;
+
+            Some(parameters)
+        };
 
         rule!(
             consume(self): token::Type::LeftBrace,

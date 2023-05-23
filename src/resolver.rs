@@ -209,9 +209,12 @@ impl<'s, 'a> Resolver<'s, 'a> {
         typ: FunctionType,
     ) -> error_stack::Result<(), ResolutionError> {
         self.with_function_scope(typ, |s| {
-            for param in &function.parameters {
-                s.declare(param, VariableState::Defined)?;
+            if let Some(parameters) = &function.parameters {
+                for param in parameters {
+                    s.declare(param, VariableState::Defined)?;
+                }
             }
+
             s.resolve_many(&function.body.statements)
         })
     }

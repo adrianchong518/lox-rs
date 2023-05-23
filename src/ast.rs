@@ -141,7 +141,7 @@ define_ast! {
         },
 
         Function<'s> [visit_function] {
-            parameters: Vec<token::Info<'s>>,
+            parameters: Option<Vec<token::Info<'s>>>,
             body: stmt::Block<'s>,
         },
     }
@@ -297,9 +297,13 @@ impl expr::Visitor<'_> for &mut Printer {
     }
 
     fn visit_function(self, v: &expr::Function<'_>) -> Self::Output {
-        // TODO: change to std once stable
-        #[allow(unstable_name_collisions)]
-        let parameters = v.parameters.iter().map(|info| &*info.lexeme).join(" ");
+        let parameters = if let Some(parameters) = &v.parameters {
+            // TODO: change to std once stable
+            #[allow(unstable_name_collisions)]
+            parameters.iter().map(|info| &*info.lexeme).join(" ")
+        } else {
+            "".to_string()
+        };
 
         self.indentation += 2;
         let body = v.body.accept(&mut *self);

@@ -4,6 +4,7 @@ pub mod clock_fn;
 pub mod function;
 pub mod instance;
 
+pub use callable::CallableObject;
 pub use class::Class;
 pub use class::ClassHandle;
 pub use clock_fn::ClockFn;
@@ -20,7 +21,7 @@ pub enum Object<'s> {
     Number(f64),
     String(String),
     Bool(bool),
-    Callable(callable::CallableObject<'s>),
+    Callable(CallableObject<'s>),
     Instance(InstanceHandle<'s>),
     Nil,
 }

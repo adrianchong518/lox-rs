@@ -44,11 +44,15 @@ impl<'s> Function<'s> {
             ..self
         }
     }
+
+    pub fn is_getter(&self) -> bool {
+        self.declaration.parameters.is_none()
+    }
 }
 
 impl<'s> callable::Callable<'s> for Function<'s> {
     fn arity(&self) -> usize {
-        self.declaration.parameters.len()
+        self.declaration.parameters.as_ref().map_or(0, |p| p.len())
     }
 
     fn call(
@@ -59,8 +63,10 @@ impl<'s> callable::Callable<'s> for Function<'s> {
     ) -> Result<super::Object<'s>, interpreter::RuntimeErrorState<'s>> {
         let mut context = env::Context::new_with_parent(self.closure.clone());
 
-        for arg in arguments {
-            context.define(arg);
+        if !self.is_getter() {
+            for arg in arguments {
+                context.define(arg);
+            }
         }
 
         let return_value = match interpreter
