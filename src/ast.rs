@@ -166,6 +166,7 @@ define_ast! {
         Class<'s> [visit_class] {
             name: token::Info<'s>,
             methods: Vec<Function<'s>>,
+            class_methods: Vec<Function<'s>>,
         },
 
         Expression<'s> [visit_expr] {
@@ -302,7 +303,7 @@ impl expr::Visitor<'_> for &mut Printer {
             #[allow(unstable_name_collisions)]
             parameters.iter().map(|info| &*info.lexeme).join(" ")
         } else {
-            "".to_string()
+            String::new()
         };
 
         self.indentation += 2;
@@ -339,12 +340,27 @@ impl stmt::Visitor<'_> for &mut Printer {
     fn visit_class(self, v: &stmt::Class<'_>) -> Self::Output {
         self.indentation += 4;
         let methods = v.methods.iter().map(|f| f.accept(&mut *self)).join("\n");
+
+        let class_methods = v
+            .class_methods
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}(:class\n{})",
+                    self.indent(),
+                    f.accept(&mut Printer {
+                        indentation: self.indentation + 4
+                    })
+                )
+            })
+            .join("\n");
         self.indentation -= 4;
 
         format!(
             "\
 {indent}(define {}
 {indent}  (class
+{indent}{class_methods}
 {indent}{methods}))",
             v.name.lexeme,
             indent = self.indent()

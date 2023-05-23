@@ -167,9 +167,16 @@ where
 
         let mut error: Option<error_stack::Report<ParseError>> = None;
         let mut methods = Vec::new();
+        let mut class_methods = Vec::new();
         while rule!(!peek_matches(self): token::Type::RightBrace).unwrap_or(false) {
+            let is_class_method = rule!(next_if_matches(self): token::Type::Class).is_some();
             match self.function("method") {
-                Ok(func) => methods.push(func),
+                Ok(func) => if is_class_method {
+                    &mut class_methods
+                } else {
+                    &mut methods
+                }
+                .push(func),
                 Err(report) => match &mut error {
                     Some(error) => error.extend_one(report),
                     None => error = Some(report),
@@ -190,7 +197,12 @@ where
         if let Some(error) = error {
             Err(error)
         } else {
-            Ok(ast::stmt::Class { name, methods }.into())
+            Ok(ast::stmt::Class {
+                name,
+                methods,
+                class_methods,
+            }
+            .into())
         }
     }
 

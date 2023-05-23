@@ -282,15 +282,24 @@ impl<'s> ast::expr::Visitor<'s> for &mut Interpreter<'s> {
     }
 
     fn visit_get(self, v: &ast::expr::Get<'s>) -> Self::Output {
-        let object::Object::Instance(instance) = self.evaluate(&v.object)? else {
-            return Err(
-                error_stack::report!(RuntimeError::new(v.dot.clone().into_owned()))
-                    .attach_printable("only instances have properties")
-                    .into(),
-            );
+        let instance = match self.evaluate(&v.object)? {
+            object::Object::Instance(instance) => instance,
+            object::Object::Callable(object::CallableObject::Class(class)) => {
+                class.metaclass_instance().ok_or_else(|| {
+                    error_stack::report!(RuntimeError::new(v.dot.clone().into_owned()))
+                        .attach_printable("how did you get a metaclass?????")
+                })?
+            }
+            _ => {
+                return Err(
+                    error_stack::report!(RuntimeError::new(v.dot.clone().into_owned()))
+                        .attach_printable("only instances have properties")
+                        .into(),
+                );
+            }
         };
 
-        let Some(object) = instance .get(&v.name.lexeme) else {
+        let Some(object) = instance.get(&v.name.lexeme) else {
             return Err(error_stack::report!(RuntimeError::new(v.name.clone().into_owned()))
                 .attach_printable(format!("undefined property `{}`", v.name.lexeme))
                 .into());
@@ -407,6 +416,19 @@ impl<'s> ast::stmt::Visitor<'s> for &mut Interpreter<'s> {
         self.environment
             .define(v.name.lexeme.clone().into_owned(), object::Object::Nil);
 
+        let metaclass = {
+            let mut class_methods = HashMap::new();
+            for method in &v.class_methods {
+                let function = object::Function::new(
+                    &method.function,
+                    self.environment.context().cloned(),
+                    false,
+                );
+                class_methods.insert(method.name.lexeme.clone().into_owned(), function);
+            }
+            object::Class::new(None, v.name.clone(), class_methods)
+        };
+
         let mut methods = HashMap::new();
         for method in &v.methods {
             let is_initializer = method.name.lexeme == object::Class::INITIALIZER_NAME;
@@ -418,7 +440,7 @@ impl<'s> ast::stmt::Visitor<'s> for &mut Interpreter<'s> {
             methods.insert(method.name.lexeme.clone().into_owned(), function);
         }
 
-        let class = object::Class::new(v.name.clone(), methods);
+        let class = object::Class::new(Some(metaclass.into()), v.name.clone(), methods);
         self.assign_variable(&v.name, class.into())?;
 
         Ok(())

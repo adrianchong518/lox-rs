@@ -365,7 +365,7 @@ impl<'s> ast::stmt::Visitor<'s> for &mut Resolver<'s, '_> {
                     },
                 );
 
-            for method in &v.methods {
+            for method in v.methods.iter().chain(&v.class_methods) {
                 s.declare(&method.name, VariableState::Read)?;
                 s.resolve_function(&method.function, FunctionType::Method)?;
             }

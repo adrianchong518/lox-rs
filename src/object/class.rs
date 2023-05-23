@@ -9,13 +9,24 @@ pub struct ClassHandle<'s>(Rc<Class<'s>>);
 pub struct Class<'s> {
     name: token::Info<'s>,
     methods: HashMap<String, super::Function<'s>>,
+
+    /// The `Class` is a metaclass if this is `None`
+    metaclass: Option<ClassHandle<'s>>,
 }
 
 impl<'s> Class<'s> {
     pub const INITIALIZER_NAME: &str = "init";
 
-    pub fn new(name: token::Info<'s>, methods: HashMap<String, super::Function<'s>>) -> Self {
-        Self { name, methods }
+    pub fn new(
+        metaclass: Option<ClassHandle<'s>>,
+        name: token::Info<'s>,
+        methods: HashMap<String, super::Function<'s>>,
+    ) -> Self {
+        Self {
+            name,
+            methods,
+            metaclass,
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -24,6 +35,12 @@ impl<'s> Class<'s> {
 
     pub fn find_method(&self, name: &str) -> Option<super::Function<'s>> {
         self.methods.get(name).cloned()
+    }
+
+    pub fn metaclass_instance(&self) -> Option<super::InstanceHandle<'s>> {
+        self.metaclass
+            .as_ref()
+            .map(|meta| super::Instance::new(meta.clone()).into())
     }
 
     fn initializer(&self) -> Option<super::Function<'s>> {
