@@ -51,15 +51,16 @@ pub struct Resolver<'s, 'a> {
     current_class: Option<ClassType>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum FunctionType {
     Function,
     Method,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum ClassType {
     Class,
+    SubClass,
 }
 
 impl<'s, 'a> Resolver<'s, 'a> {
@@ -138,7 +139,26 @@ impl<'s, 'a> Resolver<'s, 'a> {
         f: impl FnOnce(&mut Self) -> error_stack::Result<(), ResolutionError>,
     ) -> error_stack::Result<(), ResolutionError> {
         let enclosing = self.current_class.replace(typ);
-        let result = self.with_scope(f);
+
+        let result = match typ {
+            ClassType::SubClass => self.with_scope(|s| {
+                s.scopes
+                    .last_mut()
+                    .expect("a new scope is created by `with_scope`")
+                    .insert(
+                        "super".into(),
+                        Variable {
+                            name: None,
+                            state: VariableState::Read,
+                            slot: 0,
+                        },
+                    );
+                s.with_scope(f)
+            }),
+
+            ClassType::Class => self.with_scope(f),
+        };
+
         self.current_class = enclosing;
 
         result
@@ -313,6 +333,26 @@ impl<'s> ast::expr::Visitor<'s> for &mut Resolver<'s, '_> {
         Ok(())
     }
 
+    fn visit_super(self, v: &ast::expr::Super<'s>) -> Self::Output {
+        let Some(current_class) = self.current_class else {
+            return Err(error_stack::report!(ResolutionError {
+                info: v.keyword.clone().into_owned()
+            })
+            .attach_printable("cannot use `super` outside of a class"));
+        };
+
+        match current_class {
+            ClassType::Class => Err(error_stack::report!(ResolutionError {
+                info: v.keyword.clone().into_owned()
+            })
+            .attach_printable("cannot use `super` in a class with no superclass")),
+            ClassType::SubClass => {
+                self.resolve_local(v.keyword.clone(), true);
+                Ok(())
+            }
+        }
+    }
+
     fn visit_unary(self, v: &ast::expr::Unary<'s>) -> Self::Output {
         self.resolve_expr(&v.right)
     }
@@ -351,8 +391,22 @@ impl<'s> ast::stmt::Visitor<'s> for &mut Resolver<'s, '_> {
     }
 
     fn visit_class(self, v: &ast::stmt::Class<'s>) -> Self::Output {
+        let class_type = if let Some(superclass) = &v.superclass {
+            if superclass.info.lexeme == v.name.lexeme {
+                return Err(error_stack::report!(ResolutionError {
+                    info: superclass.info.clone().into_owned(),
+                })
+                .attach_printable("a class cannot inherit from itself"));
+            }
+            superclass.accept(&mut *self)?;
+            ClassType::SubClass
+        } else {
+            ClassType::Class
+        };
+
         self.declare(&v.name, VariableState::Defined)?;
-        self.with_class_scope(ClassType::Class, |s| {
+
+        self.with_class_scope(class_type, |s| {
             s.scopes
                 .last_mut()
                 .expect("a new scope is created by `with_scope`")

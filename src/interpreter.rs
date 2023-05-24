@@ -365,6 +365,63 @@ impl<'s> ast::expr::Visitor<'s> for &mut Interpreter<'s> {
         })
     }
 
+    fn visit_super(self, v: &ast::expr::Super<'s>) -> Self::Output {
+        let Some(superclass) = self.lookup_variable(&v.keyword) else {
+            return Err(error_stack::report!(RuntimeError::new(
+                v.keyword.clone().into_owned()
+            ))
+            .attach_printable("`super` is only defined for inside subclasses")
+            .into())
+        };
+
+        let object::Object::Callable(object::CallableObject::Class(superclass)) = superclass else {
+            return Err(error_stack::report!(RuntimeError::new(
+                v.keyword.clone().into_owned()
+            ))
+            .attach_printable(
+                format!("`super` is not a class object, but intead is `{superclass:#}`")
+            )
+            .into())
+        };
+
+        let Some(method) = superclass.find_method(&v.method.lexeme) else {
+            return Err(error_stack::report!(RuntimeError::new(
+                v.method.clone().into_owned()
+            ))
+            .attach_printable("method not found in super class")
+            .into())
+        };
+
+        let Some(this) = self.environment.get_at(&resolver::VariableLocation {
+            distance: self
+                .resolve_map
+                .get(&v.keyword)
+                .expect("`super` must be defined at this point")
+                .distance
+                - 1,
+            slot: 0,
+        })
+        else {
+            return Err(error_stack::report!(RuntimeError::new(
+                v.keyword.clone().into_owned()
+            ))
+            .attach_printable("`this` is not defined one level of context up")
+            .into())
+        };
+
+        let object::Object::Instance(this) = this else {
+            return Err(error_stack::report!(RuntimeError::new(
+                v.keyword.clone().into_owned()
+            ))
+            .attach_printable(
+                format!("`this` is not an instance, but instead is `{this:#}`")
+            )
+            .into())
+        };
+
+        Ok(method.bind(this).into())
+    }
+
     fn visit_unary(self, v: &ast::expr::Unary<'s>) -> Self::Output {
         let right = self.evaluate(&v.right)?;
 
@@ -388,12 +445,11 @@ impl<'s> ast::expr::Visitor<'s> for &mut Interpreter<'s> {
     }
 
     fn visit_variable(self, v: &ast::expr::Variable<'s>) -> Self::Output {
-        let value = self.lookup_variable(&v.info).ok_or_else(|| {
+        self.lookup_variable(&v.info).ok_or_else(|| {
             error_stack::report!(RuntimeError::new(v.info.clone().into_owned()))
                 .attach_printable(format!("undefined variable `{}`", v.info.lexeme))
-        })?;
-
-        Ok(value)
+                .into()
+        })
     }
 
     fn visit_function(self, v: &ast::expr::Function<'s>) -> Self::Output {
@@ -416,31 +472,42 @@ impl<'s> ast::stmt::Visitor<'s> for &mut Interpreter<'s> {
         self.environment
             .define(v.name.lexeme.clone().into_owned(), object::Object::Nil);
 
+        let (superclass, context) = if let Some(superclass) = &v.superclass {
+            let object::Object::Callable(object::CallableObject::Class(superclass)) =
+                superclass.accept(&mut *self)?
+            else {
+                return Err(error_stack::report!(RuntimeError::new(
+                    superclass.info.clone().into_owned()
+                ))
+                .attach_printable("superclass must be a class")
+                .into());
+            };
+
+            let mut context = env::Context::new_with_parent(self.environment.context().cloned());
+            context.define(superclass.clone().into());
+
+            (Some(superclass), Some(context.info_ref()))
+        } else {
+            (None, self.environment.context().cloned())
+        };
+
         let metaclass = {
             let mut class_methods = HashMap::new();
             for method in &v.class_methods {
-                let function = object::Function::new(
-                    &method.function,
-                    self.environment.context().cloned(),
-                    false,
-                );
+                let function = object::Function::new(&method.function, context.clone(), false);
                 class_methods.insert(method.name.lexeme.clone().into_owned(), function);
             }
-            object::Class::new(None, v.name.clone(), class_methods)
+            object::Class::new(v.name.clone(), None, superclass.clone(), class_methods)
         };
 
         let mut methods = HashMap::new();
         for method in &v.methods {
             let is_initializer = method.name.lexeme == object::Class::INITIALIZER_NAME;
-            let function = object::Function::new(
-                &method.function,
-                self.environment.context().cloned(),
-                is_initializer,
-            );
+            let function = object::Function::new(&method.function, context.clone(), is_initializer);
             methods.insert(method.name.lexeme.clone().into_owned(), function);
         }
 
-        let class = object::Class::new(Some(metaclass.into()), v.name.clone(), methods);
+        let class = object::Class::new(v.name.clone(), Some(metaclass.into()), superclass, methods);
         self.assign_variable(&v.name, class.into())?;
 
         Ok(())

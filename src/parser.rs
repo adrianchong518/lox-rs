@@ -160,6 +160,16 @@ where
     fn class_declaration(&mut self) -> error_stack::Result<ast::Stmt<'s>, ParseError> {
         let name = rule!(consume(self): token::Type::Identifier, "expect class name")?.info;
 
+        let superclass = if rule!(next_if_matches(self): token::Type::Less).is_some() {
+            let token::Token { info, .. } = rule!(
+                consume(self): token::Type::Identifier,
+                "exepect superclass name"
+            )?;
+            Some(ast::expr::Variable { info })
+        } else {
+            None
+        };
+
         rule!(
             consume(self): token::Type::LeftBrace,
             "expect `{` before class body"
@@ -199,6 +209,7 @@ where
         } else {
             Ok(ast::stmt::Class {
                 name,
+                superclass,
                 methods,
                 class_methods,
             }
@@ -650,6 +661,18 @@ where
                 literal: token::Literal { typ, info },
             }
             .into());
+        }
+
+        if let Some(token::Token { info: keyword, .. }) =
+            rule!(next_if_matches(self): token::Type::Super)
+        {
+            rule!(consume(self): token::Type::Dot, "exepct `.` after `super`")?;
+            let token::Token { info: method, .. } = rule!(
+                consume(self): token::Type::Identifier,
+                "expect superclass method name"
+            )?;
+
+            return Ok(ast::expr::Super { keyword, method }.into());
         }
 
         if let Some(token::Token { info: keyword, .. }) =

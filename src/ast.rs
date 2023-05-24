@@ -131,6 +131,11 @@ define_ast! {
             keyword: token::Info<'s>,
         },
 
+        Super<'s> [visit_super] {
+            keyword: token::Info<'s>,
+            method: token::Info<'s>,
+        },
+
         Unary<'s> [visit_unary] {
             operator: token::Token<'s>,
             right: Expr<'s>,
@@ -165,6 +170,7 @@ define_ast! {
 
         Class<'s> [visit_class] {
             name: token::Info<'s>,
+            superclass: Option<expr::Variable<'s>>,
             methods: Vec<Function<'s>>,
             class_methods: Vec<Function<'s>>,
         },
@@ -289,6 +295,10 @@ impl expr::Visitor<'_> for &mut Printer {
         "this".to_string()
     }
 
+    fn visit_super(self, v: &expr::Super<'_>) -> Self::Output {
+        format!("(:super {})", v.method.lexeme)
+    }
+
     fn visit_unary(self, v: &expr::Unary<'_>) -> Self::Output {
         format!("({} {})", v.operator.info.lexeme, v.right.accept(self))
     }
@@ -356,10 +366,16 @@ impl stmt::Visitor<'_> for &mut Printer {
             .join("\n");
         self.indentation -= 4;
 
+        let superclass = if let Some(superclass) = &v.superclass {
+            format!(" (:extends {})", superclass.accept(&mut *self))
+        } else {
+            String::new()
+        };
+
         format!(
             "\
 {indent}(define {}
-{indent}  (class
+{indent}  (class{superclass}
 {indent}{class_methods}
 {indent}{methods}))",
             v.name.lexeme,
